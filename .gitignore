@@ -31,7 +31,12 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env
+.env.local
+.env.production
+.env.*.local
+# Allow .env.example to be committed
+!.env.example
 
 # vercel
 .vercel
@@ -52,3 +57,36 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Database (SQLite local data)
+/db/
+*.db
+*.sqlite
+*.sqlite3
+
+# Z.ai sandbox scripts (not part of project)
+/.zscripts/
+
+# Python backend runtime
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+download/python-backend/data/
+download/python-backend/*.db
+download/python-backend/venv/
+download/python-backend/.venv/
+download/python-backend/.env
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
