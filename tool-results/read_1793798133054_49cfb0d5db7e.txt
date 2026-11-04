@@ -1,0 +1,778 @@
+     1→     1→"""
+     2→     2→trading_engine.py
+     3→     3→=================
+     4→     4→Async auto-trading loop for the V2 scalping bot.
+     5→     5→
+     6→     6→Responsibilities:
+     7→     7→    * Scan every configured pair every ``loop_interval`` seconds
+     8→     8→    * Run the strategy + 8-point checklist
+     9→     9→    * Apply the risk gate (tiered stops, max positions, max daily trades, ...)
+    10→    10→    * Place orders when a valid setup is found
+    11→    11→    * Manage open positions: TP1 partial close + SL to BE, TP2 partial close +
+    12→    12→      trailing stop, hard SL exit
+    13→    13→    * Persist signals, trades and daily risk rows to SQLite
+    14→    14→    * Emit events to a subscriber channel (used by the WebSocket layer)
+    15→    15→    * Graceful shutdown on SIGTERM / SIGINT
+    16→    16→"""
+    17→    17→
+    18→    18→from __future__ import annotations
+    19→    19→
+    20→    20→import asyncio
+    21→    21→import json
+    22→    22→import logging
+    23→    23→import math
+    24→    24→import signal
+    25→    25→from dataclasses import dataclass, field
+    26→    26→from datetime import datetime, timezone
+    27→    27→from typing import Any, AsyncIterator, Callable, Awaitable
+    28→    28→
+    29→    29→import config as cfg
+    30→    30→from config import settings
+    31→    31→from mt5_connector import MT5Connector, MT5UnavailableError, get_connector
+    32→    32→from strategy_v2 import (
+    33→    33→    SignalContext, check_setup, _candles_from_bars, WIB_TZ,
+    34→    34→    is_session_active, is_news_blackout,
+    35→    35→)
+    36→    36→from risk_manager import (
+    37→    37→    DailyRiskTracker, PositionSizer, evaluate_risk_gate,
+    38→    38→    engage_kill_switch, lock_bot, release_kill_switch, unlock_bot,
+    39→    39→    check_kill_switch,
+    40→    40→)
+    41→    41→from ollama_analyzer import get_analyzer
+    42→    42→from tiingo_calendar import get_calendar
+    43→    43→import database as db
+    44→    44→
+    45→    45→logger = logging.getLogger(__name__)
+    46→    46→
+    47→    47→
+    48→    48→# --------------------------------------------------------------------------- #
+    49→    49→# Event bus (simple in-process pub/sub for WebSocket)
+    50→    50→# --------------------------------------------------------------------------- #
+    51→    51→
+    52→    52→class EventBus:
+    53→    53→    """Minimal in-process pub/sub using asyncio queues."""
+    54→    54→
+    55→    55→    def __init__(self) -> None:
+    56→    56→        self._subscribers: list[asyncio.Queue[dict[str, Any]]] = []
+    57→    57→
+    58→    58→    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+    59→    59→        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=200)
+    60→    60→        self._subscribers.append(q)
+    61→    61→        return q
+    62→    62→
+    63→    63→    def unsubscribe(self, q: asyncio.Queue[dict[str, Any]]) -> None:
+    64→    64→        try:
+    65→    65→            self._subscribers.remove(q)
+    66→    66→        except ValueError:
+    67→    67→            pass
+    68→    68→
+    69→    69→    async def publish(self, event: dict[str, Any]) -> None:
+    70→    70→        for q in list(self._subscribers):
+    71→    71→            try:
+    72→    72→                q.put_nowait(event)
+    73→    73→            except asyncio.QueueFull:
+    74→    74→                # Drop oldest, then push
+    75→    75→                try:
+    76→    76→                    q.get_nowait()
+    77→    77→                    q.put_nowait(event)
+    78→    78→                except Exception:  # pragma: no cover
+    79→    79→                    pass
+    80→    80→
+    81→    81→
+    82→    82→# --------------------------------------------------------------------------- #
+    83→    83→# Trading engine
+    84→    84→# --------------------------------------------------------------------------- #
+    85→    85→
+    86→    86→@dataclass
+    87→    87→class EngineState:
+    88→    88→    """In-memory snapshot of the engine (for /api/status)."""
+    89→    89→    is_running: bool = False
+    90→    90→    is_locked: bool = False
+    91→    91→    kill_switch: bool = False
+    92→    92→    last_scan_at: str | None = None
+    93→    93→    last_signal: dict[str, Any] | None = None
+    94→    94→    open_positions: int = 0
+    95→    95→    daily_trades: int = 0
+    96→    96→    daily_pnl: float = 0.0
+    97→    97→    balance: float = 0.0
+    98→    98→    equity: float = 0.0
+    99→    99→    errors: list[str] = field(default_factory=list)
+   100→   100→
+   101→   101→    def to_dict(self) -> dict[str, Any]:
+   102→   102→        return {
+   103→   103→            "is_running": self.is_running,
+   104→   104→            "is_locked": self.is_locked,
+   105→   105→            "kill_switch": self.kill_switch,
+   106→   106→            "last_scan_at": self.last_scan_at,
+   107→   107→            "last_signal": self.last_signal,
+   108→   108→            "open_positions": self.open_positions,
+   109→   109→            "daily_trades": self.daily_trades,
+   110→   110→            "daily_pnl": self.daily_pnl,
+   111→   111→            "balance": self.balance,
+   112→   112→            "equity": self.equity,
+   113→   113→            "errors": self.errors[-10:],
+   114→   114→        }
+   115→   115→
+   116→   116→
+   117→   117→class TradingEngine:
+   118→   118→    """Main auto-trading loop."""
+   119→   119→
+   120→   120→    def __init__(self,
+   121→   121→                 connector: MT5Connector | None = None,
+   122→   122→                 loop_interval: float = cfg.TRADING_LOOP_INTERVAL,
+   123→   123→                 enable_ai: bool = True) -> None:
+   124→   124→        self.connector = connector or get_connector()
+   125→   125→        self.loop_interval = loop_interval
+   126→   126→        self.enable_ai = enable_ai
+   127→   127→        self.state = EngineState()
+   128→   128→        self.bus = EventBus()
+   129→   129→        self.daily_tracker = DailyRiskTracker()
+   130→   130→        self.sizer = PositionSizer()
+   131→   131→        self._task: asyncio.Task[None] | None = None
+   132→   132→        self._stop_event = asyncio.Event()
+   133→   133→        self._shutdown_handlers_installed = False
+   134→   134→
+   135→   135→    # ------------------------------------------------------------------ #
+   136→   136→    # Lifecycle
+   137→   137→    # ------------------------------------------------------------------ #
+   138→   138→
+   139→   139→    async def start(self) -> dict[str, Any]:
+   140→   140→        """Start the trading loop in the background."""
+   141→   141→        if self.state.is_running:
+   142→   142→            return {"ok": False, "message": "already running"}
+   143→   143→        if self.state.kill_switch:
+   144→   144→            return {"ok": False, "message": "kill switch engaged - release first"}
+   145→   145→        if self.state.is_locked:
+   146→   146→            return {"ok": False, "message": f"bot locked: {self._lock_reason()}"}
+   147→   147→
+   148→   148→        # Ensure MT5 is connected
+   149→   149→        if not self.connector.connected:
+   150→   150→            ok = await asyncio.to_thread(self.connector.initialize)
+   151→   151→            if not ok:
+   152→   152→                return {"ok": False,
+   153→   153→                        "message": "MT5 connection failed - check terminal & credentials"}
+   154→   154→
+   155→   155→        self._stop_event.clear()
+   156→   156→        self._task = asyncio.create_task(self._run_loop(), name="trading_loop")
+   157→   157→        self.state.is_running = True
+   158→   158→        db.update_bot_state(is_running=True)
+   159→   159→        await self.bus.publish({"type": "engine_started",
+   160→   160→                                "ts": datetime.now(timezone.utc).isoformat()})
+   161→   161→        logger.info("Trading engine started (interval=%.1fs)", self.loop_interval)
+   162→   162→        return {"ok": True, "message": "started"}
+   163→   163→
+   164→   164→    async def stop(self, reason: str = "manual") -> dict[str, Any]:
+   165→   165→        """Stop the trading loop (does NOT close positions)."""
+   166→   166→        if not self.state.is_running and self._task is None:
+   167→   167→            return {"ok": False, "message": "not running"}
+   168→   168→        self._stop_event.set()
+   169→   169→        if self._task is not None:
+   170→   170→            self._task.cancel()
+   171→   171→            try:
+   172→   172→                await self._task
+   173→   173→            except asyncio.CancelledError:
+   174→   174→                pass
+   175→   175→            self._task = None
+   176→   176→        self.state.is_running = False
+   177→   177→        db.update_bot_state(is_running=False, last_error=reason)
+   178→   178→        await self.bus.publish({"type": "engine_stopped", "reason": reason,
+   179→   179→                                "ts": datetime.now(timezone.utc).isoformat()})
+   180→   180→        logger.info("Trading engine stopped (%s)", reason)
+   181→   181→        return {"ok": True, "message": f"stopped: {reason}"}
+   182→   182→
+   183→   183→    async def kill(self, reason: str = "manual_kill") -> dict[str, Any]:
+   184→   184→        """Emergency kill switch: stop loop + close ALL positions + lock."""
+   185→   185→        logger.warning("KILL SWITCH ENGAGED: %s", reason)
+   186→   186→        # Stop the loop first
+   187→   187→        await self.stop(reason=f"kill:{reason}")
+   188→   188→        # Close all positions
+   189→   189→        closed: list[dict[str, Any]] = []
+   190→   190→        try:
+   191→   191→            closed = await asyncio.to_thread(self.connector.close_all_positions)
+   192→   192→        except MT5UnavailableError as exc:
+   193→   193→            logger.error("Cannot close positions (MT5 unavailable): %s", exc)
+   194→   194→        except Exception as exc:  # pragma: no cover
+   195→   195→            logger.exception("close_all_positions failed: %s", exc)
+   196→   196→        # Engage kill switch + lock
+   197→   197→        engage_kill_switch()
+   198→   198→        lock_bot(f"kill:{reason}")
+   199→   199→        self.state.kill_switch = True
+   200→   200→        self.state.is_locked = True
+   201→   201→        await self.bus.publish({
+   202→   202→            "type": "kill_switch_engaged",
+   203→   203→            "reason": reason,
+   204→   204→            "closed": closed,
+   205→   205→            "ts": datetime.now(timezone.utc).isoformat(),
+   206→   206→        })
+   207→   207→        return {"ok": True, "closed": closed, "reason": reason}
+   208→   208→
+   209→   209→    async def release_kill(self) -> dict[str, Any]:
+   210→   210→        """Release the kill switch + unlock (manual override)."""
+   211→   211→        from risk_manager import release_kill_switch
+   212→   212→        release_kill_switch()
+   213→   213→        unlock_bot()
+   214→   214→        self.state.kill_switch = False
+   215→   215→        self.state.is_locked = False
+   216→   216→        await self.bus.publish({"type": "kill_switch_released",
+   217→   217→                                "ts": datetime.now(timezone.utc).isoformat()})
+   218→   218→        return {"ok": True}
+   219→   219→
+   220→   220→    def _lock_reason(self) -> str | None:
+   221→   221→        st = db.get_bot_state()
+   222→   222→        return st.get("lock_reason")
+   223→   223→
+   224→   224→    # ------------------------------------------------------------------ #
+   225→   225→    # Main loop
+   226→   226→    # ------------------------------------------------------------------ #
+   227→   227→
+   228→   228→    async def _run_loop(self) -> None:
+   229→   229→        """The main scan loop.  Runs until cancelled or stopped."""
+   230→   230→        self._install_shutdown_handlers()
+   231→   231→        try:
+   232→   232→            while not self._stop_event.is_set():
+   233→   233→                try:
+   234→   234→                    await self._tick()
+   235→   235→                except MT5UnavailableError as exc:
+   236→   236→                    logger.error("MT5 unavailable: %s", exc)
+   237→   237→                    self.state.errors.append(str(exc))
+   238→   238→                    # Try to reconnect
+   239→   239→                    try:
+   240→   240→                        await asyncio.to_thread(self.connector.initialize)
+   241→   241→                    except Exception:
+   242→   242→                        pass
+   243→   243→                except Exception as exc:  # pragma: no cover
+   244→   244→                    logger.exception("Tick failed: %s", exc)
+   245→   245→                    self.state.errors.append(str(exc))
+   246→   246→                    db.update_bot_state(last_error=str(exc))
+   247→   247→                # Wait for next tick or stop
+   248→   248→                try:
+   249→   249→                    await asyncio.wait_for(self._stop_event.wait(),
+   250→   250→                                            timeout=self.loop_interval)
+   251→   251→                except asyncio.TimeoutError:
+   252→   252→                    pass
+   253→   253→        except asyncio.CancelledError:
+   254→   254→            logger.info("Trading loop cancelled")
+   255→   255→            raise
+   256→   256→        finally:
+   257→   257→            self.state.is_running = False
+   258→   258→            db.update_bot_state(is_running=False,
+   259→   259→                                last_loop_at=datetime.now(timezone.utc))
+   260→   260→
+   261→   261→    async def _tick(self) -> None:
+   262→   262→        """One scan + manage iteration."""
+   263→   263→        # Update account snapshot
+   264→   264→        try:
+   265→   265→            account = await asyncio.to_thread(self.connector.get_account_info)
+   266→   266→            self.state.balance = account.balance
+   267→   267→            self.state.equity = account.equity
+   268→   268→        except Exception as exc:
+   269→   269→            logger.warning("get_account_info failed: %s", exc)
+   270→   270→            return
+   271→   271→
+   272→   272→        # Daily risk
+   273→   273→        daily = self.daily_tracker.get_state(balance=account.balance)
+   274→   274→        self.state.daily_trades = daily.trade_count
+   275→   275→        self.state.daily_pnl = daily.realized_pnl
+   276→   276→
+   277→   277→        # Manage open positions first
+   278→   278→        await self.manage_open_positions(account.balance)
+   279→   279→
+   280→   280→        # Risk gate
+   281→   281→        positions = await asyncio.to_thread(self.connector.get_positions)
+   282→   282→        self.state.open_positions = len(positions)
+   283→   283→
+   284→   284→        # Weekly/overall starting balance: use last Monday & lifetime.
+   285→   285→        weekly_start = await self._weekly_starting_balance(account.balance)
+   286→   286→        overall_start = await self._overall_starting_balance(account.balance)
+   287→   287→        gate = evaluate_risk_gate(
+   288→   288→            current_positions=len(positions),
+   289→   289→            daily_state=daily,
+   290→   290→            weekly_start=weekly_start,
+   291→   291→            overall_start=overall_start,
+   292→   292→            current_balance=account.balance,
+   293→   293→        )
+   294→   294→        self.state.is_locked = gate.bot_locked
+   295→   295→        self.state.kill_switch = gate.kill_switch
+   296→   296→
+   297→   297→        if gate.kill_switch:
+   298→   298→            logger.warning("Kill switch active - skipping scan")
+   299→   299→            return
+   300→   300→        if not gate.allow_new_entry:
+   301→   301→            logger.info("Risk gate blocks new entries: %s", gate.reasons)
+   302→   302→            await self.bus.publish({
+   303→   303→                "type": "risk_gate_blocked",
+   304→   304→                "reasons": gate.reasons,
+   305→   305→                "ts": datetime.now(timezone.utc).isoformat(),
+   306→   306→            })
+   307→   307→            # If hard stop triggered -> engage kill switch
+   308→   308→            if gate.tiered_stop.level == "hard":
+   309→   309→                await self.kill(reason=f"hard_stop:{gate.tiered_stop.pnl_pct}")
+   310→   310→            return
+   311→   311→
+   312→   312→        # Scan markets
+   313→   313→        await self.scan_markets(account.balance)
+   314→   314→
+   315→   315→        # Persist state
+   316→   316→        self.state.last_scan_at = datetime.now(timezone.utc).isoformat()
+   317→   317→        db.update_bot_state(last_loop_at=datetime.now(timezone.utc))
+   318→   318→
+   319→   319→    # ------------------------------------------------------------------ #
+   320→   320→    # Market scanning
+   321→   321→    # ------------------------------------------------------------------ #
+   322→   322→
+   323→   323→    async def scan_markets(self, balance: float) -> list[SignalContext]:
+   324→   324→        """Scan every configured pair and return any valid signals."""
+   325→   325→        # Fetch news once
+   326→   326→        try:
+   327→   327→            cal = get_calendar()
+   328→   328→            news_events = await cal.fetch_calendar(impact="HIGH")
+   329→   329→        except Exception as exc:  # pragma: no cover
+   330→   330→            logger.warning("Tiingo calendar fetch failed: %s", exc)
+   331→   331→            news_events = []
+   332→   332→
+   333→   333→        signals: list[SignalContext] = []
+   334→   334→        for pair, mt5_sym in zip(settings.pairs, settings.mt5_symbols):
+   335→   335→            try:
+   336→   336→                sig = await self._scan_symbol(pair, mt5_sym, balance, news_events)
+   337→   337→                if sig:
+   338→   338→                    signals.append(sig)
+   339→   339→                    await self.on_signal(sig, mt5_sym, balance, news_events)
+   340→   340→            except MT5UnavailableError:
+   341→   341→                raise
+   342→   342→            except Exception as exc:  # pragma: no cover
+   343→   343→                logger.exception("scan_symbol(%s) failed: %s", pair, exc)
+   344→   344→        return signals
+   345→   345→
+   346→   346→    async def _scan_symbol(self, pair: str, mt5_sym: str,
+   347→   347→                           balance: float,
+   348→   348→                           news_events: list[dict[str, Any]]) -> SignalContext | None:
+   349→   349→        """Scan one symbol and return its SignalContext (or None)."""
+   350→   350→        # Fetch candles
+   351→   351→        candles_m5_raw = await asyncio.to_thread(
+   352→   352→            self.connector.get_candles, mt5_sym, "M5", 200)
+   353→   353→        candles_m15_raw = await asyncio.to_thread(
+   354→   354→            self.connector.get_candles, mt5_sym, "M15", 200)
+   355→   355→        if not candles_m5_raw or not candles_m15_raw:
+   356→   356→            return None
+   357→   357→
+   358→   358→        candles_m5 = _candles_from_bars(candles_m5_raw)
+   359→   359→        candles_m15 = _candles_from_bars(candles_m15_raw)
+   360→   360→
+   361→   361→        # Symbol info
+   362→   362→        try:
+   363→   363→            sym_info = await asyncio.to_thread(
+   364→   364→                self.connector.get_symbol_info, mt5_sym)
+   365→   365→        except Exception as exc:  # pragma: no cover
+   366→   366→            logger.warning("get_symbol_info(%s) failed: %s", mt5_sym, exc)
+   367→   367→            return None
+   368→   368→
+   369→   369→        spread_pips = sym_info.spread * sym_info.point / sym_info.pip_size \
+   370→   370→            if sym_info.pip_size > 0 else 0.0
+   371→   371→        # Commission pips: assume round-turn commission in account currency
+   372→   372→        # converted to pips.  Default to 0.7 pip ECN if unknown.
+   373→   373→        commission_pips = 0.7
+   374→   374→        try:
+   375→   375→            commission_pips = float(db.get_setting("commission_pips") or "0.7")
+   376→   376→        except Exception:
+   377→   377→            pass
+   378→   378→
+   379→   379→        daily = self.daily_tracker.get_state()
+   380→   380→        ctx = check_setup(
+   381→   381→            symbol=pair,
+   382→   382→            candles_m5=candles_m5,
+   383→   383→            candles_m15=candles_m15,
+   384→   384→            symbol_info=sym_info,
+   385→   385→            spread_pips=spread_pips,
+   386→   386→            commission_pips=commission_pips,
+   387→   387→            balance=balance,
+   388→   388→            news_events=news_events,
+   389→   389→            soft_stop_hit=daily.soft_stop_hit,
+   390→   390→            now_wib=datetime.now(WIB_TZ),
+   391→   391→        )
+   392→   392→        if ctx is None:
+   393→   393→            return None
+   394→   394→
+   395→   395→        # Persist signal
+   396→   396→        db.insert_signal(
+   397→   397→            symbol=pair,
+   398→   398→            direction=ctx.direction or ("buy" if ctx.ema9 > ctx.ema21 else "sell"),
+   399→   399→            entry_price=ctx.entry_price,
+   400→   400→            sl=ctx.sl_price,
+   401→   401→            tp1=ctx.tp1_price,
+   402→   402→            tp2=ctx.tp2_price,
+   403→   403→            atr=ctx.atr_pips,
+   404→   404→            adx=ctx.adx_value,
+   405→   405→            rr_net=ctx.rr_net,
+   406→   406→            regime=ctx.regime,
+   407→   407→            session=ctx.session,
+   408→   408→            checklist_json=json.dumps(ctx.checklist),
+   409→   409→            executed=False,
+   410→   410→        )
+   411→   411→
+   412→   412→        # Publish event
+   413→   413→        event = {
+   414→   414→            "type": "signal",
+   415→   415→            "symbol": pair,
+   416→   416→            "direction": ctx.direction,
+   417→   417→            "pass_all": ctx.pass_all,
+   418→   418→            "regime": ctx.regime,
+   419→   419→            "session": ctx.session,
+   420→   420→            "adx": ctx.adx_value,
+   421→   421→            "rr_net": ctx.rr_net,
+   422→   422→            "checklist": ctx.checklist,
+   423→   423→            "fail_reasons": ctx.fail_reasons,
+   424→   424→            "ts": ctx.timestamp,
+   425→   425→        }
+   426→   426→        await self.bus.publish(event)
+   427→   427→        self.state.last_signal = event
+   428→   428→        return ctx
+   429→   429→
+   430→   430→    # ------------------------------------------------------------------ #
+   431→   431→    # Signal execution
+   432→   432→    # ------------------------------------------------------------------ #
+   433→   433→
+   434→   434→    async def on_signal(self, sig: SignalContext, mt5_sym: str,
+   435→   435→                        balance: float,
+   436→   436→                        news_events: list[dict[str, Any]]) -> None:
+   437→   437→        """Evaluate + execute a signal (subject to AI compliance if enabled)."""
+   438→   438→        if not sig.pass_all:
+   439→   439→            logger.info("Signal %s %s failed checklist: %s",
+   440→   440→                        sig.symbol, sig.direction, sig.fail_reasons)
+   441→   441→            return
+   442→   442→        if sig.direction is None:
+   443→   443→            return
+   444→   444→
+   445→   445→        # Optional AI compliance check
+   446→   446→        if self.enable_ai:
+   447→   447→            try:
+   448→   448→                analyzer = get_analyzer()
+   449→   449→                ai = await analyzer.analyze_setup(sig.to_dict())
+   450→   450→                if not ai.compliant:
+   451→   451→                    logger.info("AI rejected setup %s: %s (risks=%s)",
+   452→   452→                                sig.symbol, ai.suggestion, ai.risks)
+   453→   453→                    await self.bus.publish({
+   454→   454→                        "type": "ai_rejected",
+   455→   455→                        "symbol": sig.symbol,
+   456→   456→                        "suggestion": ai.suggestion,
+   457→   457→                        "risks": ai.risks,
+   458→   458→                        "ts": datetime.now(timezone.utc).isoformat(),
+   459→   459→                    })
+   460→   460→                    return
+   461→   461→            except Exception as exc:  # pragma: no cover
+   462→   462→                logger.warning("AI analysis failed - proceeding: %s", exc)
+   463→   463→
+   464→   464→        # Final risk gate
+   465→   465→        positions = await asyncio.to_thread(self.connector.get_positions)
+   466→   466→        daily = self.daily_tracker.get_state(balance=balance)
+   467→   467→        weekly_start = await self._weekly_starting_balance(balance)
+   468→   468→        overall_start = await self._overall_starting_balance(balance)
+   469→   469→        gate = evaluate_risk_gate(
+   470→   470→            current_positions=len(positions),
+   471→   471→            daily_state=daily,
+   472→   472→            weekly_start=weekly_start,
+   473→   473→            overall_start=overall_start,
+   474→   474→            current_balance=balance,
+   475→   475→        )
+   476→   476→        if not gate.allow_new_entry:
+   477→   477→            logger.info("Risk gate blocks entry for %s: %s",
+   478→   478→                        sig.symbol, gate.reasons)
+   479→   479→            return
+   480→   480→
+   481→   481→        # Lot size
+   482→   482→        if sig.lot_size is None or sig.lot_size <= 0:
+   483→   483→            logger.warning("No valid lot size for %s - skipping", sig.symbol)
+   484→   484→            return
+   485→   485→
+   486→   486→        # Execute order
+   487→   487→        order = await asyncio.to_thread(
+   488→   488→            self.connector.place_order,
+   489→   489→            mt5_sym, sig.direction, sig.lot_size,
+   490→   490→            sig.sl_price or 0.0,
+   491→   491→            sig.tp1_price or 0.0,
+   492→   492→            comment=f"v2:{sig.regime[:3]}",
+   493→   493→        )
+   494→   494→        ok = order.get("ok", False)
+   495→   495→        await self.bus.publish({
+   496→   496→            "type": "order_placed",
+   497→   497→            "symbol": sig.symbol,
+   498→   498→            "direction": sig.direction,
+   499→   499→            "lot": sig.lot_size,
+   500→   500→            "sl": sig.sl_price,
+   501→   501→            "tp": sig.tp1_price,
+   502→   502→            "ok": ok,
+   503→   503→            "retcode": order.get("retcode"),
+   504→   504→            "comment": order.get("comment"),
+   505→   505→            "ts": datetime.now(timezone.utc).isoformat(),
+   506→   506→        })
+   507→   507→        if ok:
+   508→   508→            trade_id = db.insert_trade(
+   509→   509→                ticket=order.get("ticket"),
+   510→   510→                symbol=sig.symbol,
+   511→   511→                direction=sig.direction,
+   512→   512→                volume=sig.lot_size,
+   513→   513→                open_price=sig.entry_price,
+   514→   514→                sl=sig.sl_price,
+   515→   515→                tp=sig.tp1_price,
+   516→   516→                status="open",
+   517→   517→                session_name=sig.session,
+   518→   518→                entry_reason=",".join(sig.checklist.keys()) if sig.checklist else "",
+   519→   519→                checklist_json=json.dumps(sig.checklist),
+   520→   520→                comment=f"v2:{sig.regime[:3]}",
+   521→   521→            )
+   522→   522→            logger.info("Order placed: %s %s %.2f lot ticket=%s trade_id=%s",
+   523→   523→                        sig.symbol, sig.direction, sig.lot_size,
+   524→   524→                        order.get("ticket"), trade_id)
+   525→   525→        else:
+   526→   526→            logger.warning("Order failed for %s: %s", sig.symbol, order)
+   527→   527→
+   528→   528→    # ------------------------------------------------------------------ #
+   529→   529→    # Position management
+   530→   530→    # ------------------------------------------------------------------ #
+   531→   531→
+   532→   532→    async def manage_open_positions(self, balance: float) -> None:
+   533→   533→        """Check TP1 / TP2 / trailing / SL on every open position."""
+   534→   534→        try:
+   535→   535→            positions = await asyncio.to_thread(self.connector.get_positions)
+   536→   536→        except Exception as exc:  # pragma: no cover
+   537→   537→            logger.warning("get_positions failed: %s", exc)
+   538→   538→            return
+   539→   539→
+   540→   540→        for pos in positions:
+   541→   541→            try:
+   542→   542→                await self._manage_one(pos, balance)
+   543→   543→            except Exception as exc:  # pragma: no cover
+   544→   544→                logger.exception("manage_one(%s) failed: %s", pos.ticket, exc)
+   545→   545→
+   546→   546→    async def _manage_one(self, pos: Any, balance: float) -> None:
+   547→   547→        """Manage a single position: TP1/TP2/trailing/SL."""
+   548→   548→        # Pull context for this position from DB (if any)
+   549→   549→        # We track management state via comments / position sl vs entry.
+   550→   550→        is_buy = pos.type == "buy"
+   551→   551→        sym_info = await asyncio.to_thread(
+   552→   552→            self.connector.get_symbol_info, pos.symbol)
+   553→   553→        pip_size = sym_info.pip_size
+   554→   554→        current_price = sym_info.bid if is_buy else sym_info.ask
+   555→   555→        entry = pos.open_price
+   556→   556→        sl = pos.sl
+   557→   557→
+   558→   558→        # Distance to TP1 in pips (if we recorded original SL/TP we'd compute
+   559→   559→        # exactly; here we approximate using current SL distance).
+   560→   560→        if sl == 0:
+   561→   561→            return   # no SL set, cannot derive TP1/TP2
+   562→   562→        sl_distance_pips = abs(entry - sl) / pip_size if pip_size else 0
+   563→   563→        tp1_distance = sl_distance_pips * cfg.TP1_MULT
+   564→   564→        tp2_distance = sl_distance_pips * cfg.TP2_MULT
+   565→   565→
+   566→   566→        # Current PnL in pips
+   567→   567→        if is_buy:
+   568→   568→            moved_pips = (current_price - entry) / pip_size if pip_size else 0
+   569→   569→        else:
+   570→   570→            moved_pips = (entry - current_price) / pip_size if pip_size else 0
+   571→   571→
+   572→   572→        # ---- TP1: close 50%, move SL to BE+2 ----
+   573→   573→        if moved_pips >= tp1_distance and not self._tp1_done(pos):
+   574→   574→            # Move SL to BE+2
+   575→   575→            be_buffer = cfg.BE_BUFFER_PIPS * pip_size
+   576→   576→            if is_buy:
+   577→   577→                new_sl = entry + be_buffer
+   578→   578→            else:
+   579→   579→                new_sl = entry - be_buffer
+   580→   580→            await asyncio.to_thread(
+   581→   581→                self.connector.modify_position, pos.ticket, sl=new_sl, tp=pos.tp)
+   582→   582→            # Partial close 50%
+   583→   583→            partial_vol = round(pos.volume * cfg.TP1_CLOSE_PCT, 2)
+   584→   584→            await self._partial_close(pos, partial_vol, reason="tp1")
+   585→   585→            await self.bus.publish({
+   586→   586→                "type": "tp1_hit",
+   587→   587→                "ticket": pos.ticket,
+   588→   588→                "symbol": pos.symbol,
+   589→   589→                "sl_to_be": new_sl,
+   590→   590→                "closed_volume": partial_vol,
+   591→   591→                "ts": datetime.now(timezone.utc).isoformat(),
+   592→   592→            })
+   593→   593→
+   594→   594→        # ---- TP2: close 30%, start trailing ----
+   595→   595→        elif moved_pips >= tp2_distance and not self._tp2_done(pos):
+   596→   596→            partial_vol = round(pos.volume * cfg.TP2_CLOSE_PCT, 2)
+   597→   597→            await self._partial_close(pos, partial_vol, reason="tp2")
+   598→   598→            await self.bus.publish({
+   599→   599→                "type": "tp2_hit",
+   600→   600→                "ticket": pos.ticket,
+   601→   601→                "symbol": pos.symbol,
+   602→   602→                "closed_volume": partial_vol,
+   603→   603→                "ts": datetime.now(timezone.utc).isoformat(),
+   604→   604→            })
+   605→   605→
+   606→   606→        # ---- Trailing 2x ATR for remaining 20% ----
+   607→   607→        elif moved_pips >= tp2_distance and self._tp2_done(pos):
+   608→   608→            await self._trail_position(pos, sym_info, is_buy, entry, pip_size)
+   609→   609→
+   610→   610→    def _tp1_done(self, pos: Any) -> bool:
+   611→   611→        """Heuristic: TP1 is done if current SL is at/beyond BE+2."""
+   612→   612→        if pos.sl == 0 or pos.open_price == 0:
+   613→   613→            return False
+   614→   614→        if pos.type == "buy":
+   615→   615→            return pos.sl >= pos.open_price
+   616→   616→        return pos.sl <= pos.open_price
+   617→   617→
+   618→   618→    def _tp2_done(self, pos: Any) -> bool:
+   619→   619→        """Heuristic: assume TP2 done if position volume already reduced.
+   620→   620→
+   621→   621→        In a real broker integration we'd track this explicitly via magic
+   622→   622→        numbers or a separate DB column.
+   623→   623→        """
+   624→   624→        return False   # placeholder; full state tracking done via DB
+   625→   625→
+   626→   626→    async def _partial_close(self, pos: Any, volume: float, reason: str) -> None:
+   627→   627→        """Close part of a position.  MT5 doesn't support partial closes
+   628→   628→        directly; we'd normally re-open the remainder.  For simplicity we
+   629→   629→        close the entire position here and re-open with the residual volume.
+   630→   630→
+   631→   631→        NOTE: This is a simplified implementation - in production use
+   632→   632→        ``order_send`` with reduced volume and a "close" opposite order for
+   633→   633→        the partial.
+   634→   634→        """
+   635→   635→        if volume <= 0:
+   636→   636→            return
+   637→   637→        # Simplified: just close the whole ticket.  Real partial-close logic
+   638→   638→        # would split the ticket via opposite orders.
+   639→   639→        logger.info("Partial close (%s) ticket=%s vol=%.2f -> full close",
+   640→   640→                    reason, pos.ticket, volume)
+   641→   641→        await self.exit_position(pos.ticket, reason=reason)
+   642→   642→
+   643→   643→    async def _trail_position(self, pos: Any, sym_info: Any,
+   644→   644→                              is_buy: bool, entry: float,
+   645→   645→                              pip_size: float) -> None:
+   646→   646→        """Trail the SL at 2 x ATR behind current price."""
+   647→   647→        try:
+   648→   648→            bars = await asyncio.to_thread(
+   649→   649→                self.connector.get_candles, pos.symbol, "M5", 50)
+   650→   650→            if not bars:
+   651→   651→                return
+   652→   652→            candles = _candles_from_bars(bars)
+   653→   653→            from indicators import atr as _atr
+   654→   654→            atr_val = _atr([c.high for c in candles],
+   655→   655→                           [c.low for c in candles],
+   656→   656→                           [c.close for c in candles], period=14)
+   657→   657→            if math.isnan(atr_val):
+   658→   658→                return
+   659→   659→            trail = atr_val * cfg.TRAIL_ATR_MULT
+   660→   660→            if is_buy:
+   661→   661→                new_sl = (sym_info.bid - trail)
+   662→   662→                if new_sl > pos.sl:
+   663→   663→                    await asyncio.to_thread(
+   664→   664→                        self.connector.modify_position, pos.ticket,
+   665→   665→                        sl=new_sl, tp=pos.tp)
+   666→   666→            else:
+   667→   667→                new_sl = (sym_info.ask + trail)
+   668→   668→                if pos.sl == 0 or new_sl < pos.sl:
+   669→   669→                    await asyncio.to_thread(
+   670→   670→                        self.connector.modify_position, pos.ticket,
+   671→   671→                        sl=new_sl, tp=pos.tp)
+   672→   672→        except Exception as exc:  # pragma: no cover
+   673→   673→            logger.warning("Trail failed for %s: %s", pos.ticket, exc)
+   674→   674→
+   675→   675→    async def exit_position(self, ticket: int, reason: str) -> dict[str, Any]:
+   676→   676→        """Close a position by ticket."""
+   677→   677→        result = await asyncio.to_thread(self.connector.close_position, ticket)
+   678→   678→        await self.bus.publish({
+   679→   679→            "type": "position_closed",
+   680→   680→            "ticket": ticket,
+   681→   681→            "reason": reason,
+   682→   682→            "ok": result.get("ok"),
+   683→   683→            "ts": datetime.now(timezone.utc).isoformat(),
+   684→   684→        })
+   685→   685→        return result
+   686→   686→
+   687→   687→    # ------------------------------------------------------------------ #
+   688→   688→    # Helpers
+   689→   689→    # ------------------------------------------------------------------ #
+   690→   690→
+   691→   691→    async def _weekly_starting_balance(self, fallback: float) -> float:
+   692→   692→        """Approx weekly starting balance.  Real impl would track per-week."""
+   693→   693→        val = db.get_setting("weekly_starting_balance")
+   694→   694→        if val:
+   695→   695→            try:
+   696→   696→                return float(val)
+   697→   697→            except ValueError:
+   698→   698→                pass
+   699→   699→        return fallback
+   700→   700→
+   701→   701→    async def _overall_starting_balance(self, fallback: float) -> float:
+   702→   702→        """Approx lifetime starting balance."""
+   703→   703→        val = db.get_setting("overall_starting_balance")
+   704→   704→        if val:
+   705→   705→            try:
+   706→   706→                return float(val)
+   707→   707→            except ValueError:
+   708→   708→                pass
+   709→   709→        return fallback
+   710→   710→
+   711→   711→    # ------------------------------------------------------------------ #
+   712→   712→    # Shutdown handlers
+   713→   713→    # ------------------------------------------------------------------ #
+   714→   714→
+   715→   715→    def _install_shutdown_handlers(self) -> None:
+   716→   716→        if self._shutdown_handlers_installed:
+   717→   717→            return
+   718→   718→        try:
+   719→   719→            loop = asyncio.get_running_loop()
+   720→   720→            for sig in (signal.SIGINT, signal.SIGTERM):
+   721→   721→                try:
+   722→   722→                    loop.add_signal_handler(sig, self._on_signal)
+   723→   723→                except NotImplementedError:
+   724→   724→                    # Windows - use KeyboardInterrupt fallback
+   725→   725→                    pass
+   726→   726→        except RuntimeError:
+   727→   727→            pass
+   728→   728→        self._shutdown_handlers_installed = True
+   729→   729→
+   730→   730→    def _on_signal(self) -> None:
+   731→   731→        logger.warning("Shutdown signal received - stopping engine")
+   732→   732→        asyncio.create_task(self.stop(reason="signal"))
+   733→   733→
+   734→   734→    # ------------------------------------------------------------------ #
+   735→   735→    # Snapshot for status endpoint
+   736→   736→    # ------------------------------------------------------------------ #
+   737→   737→
+   738→   738→    def snapshot(self) -> dict[str, Any]:
+   739→   739→        """Return a dict suitable for the /api/status endpoint."""
+   740→   740→        snap = self.state.to_dict()
+   741→   741→        snap["mt5_connected"] = self.connector.connected
+   742→   742→        snap["pairs"] = settings.pairs
+   743→   743→        snap["loop_interval_s"] = self.loop_interval
+   744→   744→        snap["ai_enabled"] = self.enable_ai
+   745→   745→        try:
+   746→   746→            st = db.get_bot_state()
+   747→   747→            snap["db_state"] = st
+   748→   748→        except Exception:
+   749→   749→            snap["db_state"] = None
+   750→   750→        return snap
+   751→   751→
+   752→   752→
+   753→   753→# --------------------------------------------------------------------------- #
+   754→   754→# Singleton
+   755→   755→# --------------------------------------------------------------------------- #
+   756→   756→
+   757→   757→_engine: TradingEngine | None = None
+   758→   758→
+   759→   759→
+   760→   760→def get_engine() -> TradingEngine:
+   761→   761→    """Return the module-level TradingEngine singleton."""
+   762→   762→    global _engine
+   763→   763→    if _engine is None:
+   764→   764→        _engine = TradingEngine()
+   765→   765→    return _engine
+   766→   766→
+   767→   767→
+   768→   768→def reset_engine() -> None:
+   769→   769→    """Reset the singleton (used by tests)."""
+   770→   770→    global _engine
+   771→   771→    _engine = None
+   772→   772→
+   773→   773→
+   774→   774→__all__ = [
+   775→   775→    "TradingEngine", "EngineState", "EventBus",
+   776→   776→    "get_engine", "reset_engine",
+   777→   777→]
+   778→   778→
