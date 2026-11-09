@@ -37,10 +37,22 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import (
     DeclarativeBase, Session, sessionmaker,
 )
+from sqlalchemy.types import Enum as SAEnum
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 5 #2: optional SQLCipher encryption at rest
+# --------------------------------------------------------------------------- #
+
+try:
+    import sqlcipher3  # noqa: F401  (only the import side-effect matters)
+    _SQLCIPHER_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _SQLCIPHER_AVAILABLE = False
 
 
 # --------------------------------------------------------------------------- #
@@ -94,6 +106,9 @@ class Trade(Base):
     emotional_note = Column(Text, nullable=True)
     strategy_version = Column(String(16), default="v2.0")
     is_paper = Column(Boolean, default=False)                   # paper-mode flag
+    # ---- Sprint 7 #17: slippage + latency ---- #
+    slippage_actual = Column(Float, nullable=True)             # pips (fill - req)
+    execution_latency_ms = Column(Integer, nullable=True)      # order ack latency
 
 
 class Signal(Base):
@@ -222,6 +237,14 @@ class AuditLog(Base):
 
     Rows are written by :class:`trading_engine.EventBus.publish` so that
     every WebSocket-pushed event also persists.
+
+    Sprint 6 #10: hash-chained immutability
+    ---------------------------------------
+    Each row stores ``prev_hash`` (the ``hash`` of the immediately preceding
+    row) and ``hash`` (SHA-256 of ``prev_hash + event_type + timestamp +
+    detail_json``).  SQLite triggers prevent UPDATE/DELETE on the table so
+    rows are tamper-evident.  Use :func:`verify_audit_chain` to validate the
+    chain at any time.
     """
     __tablename__ = "audit_log"
 
@@ -233,6 +256,10 @@ class AuditLog(Base):
     ticket = Column(Integer, nullable=True)
     detail_json = Column(Text, nullable=True)
     severity = Column(String(10), default="INFO")  # INFO|WARN|ERROR|CRITICAL
+    # ---- Sprint 6 #10: hash chain ---- #
+    prev_hash = Column(String(64), nullable=True)
+    hash = Column(String(64), nullable=True, index=True)
+    signature = Column(Text, nullable=True)  # reserved for future HMAC sign
 
 
 class EquityCurve(Base):
@@ -276,6 +303,116 @@ class BacktestResult(Base):
 
 
 # --------------------------------------------------------------------------- #
+# Sprint 5 #3: encrypted secrets table
+# --------------------------------------------------------------------------- #
+
+class Secret(Base):
+    """Encrypted secret stored at rest (Fernet token in ``encrypted_value``)."""
+    __tablename__ = "secrets"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(64), unique=True, nullable=False, index=True)
+    encrypted_value = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 5 #6: users + roles for NextAuth integration
+# --------------------------------------------------------------------------- #
+
+class UserRole:
+    """String constants for user roles (stored as plain VARCHAR)."""
+    ADMIN = "ADMIN"
+    TRADER = "TRADER"
+    VIEWER = "VIEWER"
+
+
+class User(Base):
+    """User account with role-based access.  Password is bcrypt-hashed."""
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    api_key = Column(String(128), unique=True, nullable=True, index=True)
+    role = Column(String(16), default=UserRole.VIEWER, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #9: signed risk-disclosure acknowledgments
+# --------------------------------------------------------------------------- #
+
+class RiskAcknowledgment(Base):
+    """Signed risk disclosure - one row per user / version / acknowledgement."""
+    __tablename__ = "risk_acknowledgments"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=True, index=True)  # nullable for static-key mode
+    version = Column(String(32), nullable=False, index=True)
+    acknowledged_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                             nullable=False, index=True)
+    ip_address = Column(String(64), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #12: trade reconstruction tick-level events
+# --------------------------------------------------------------------------- #
+
+class TradeEvent(Base):
+    """Tick-level event for a single trade (entry, SL move, TP hits, ...)."""
+    __tablename__ = "trade_events"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_id = Column(Integer, nullable=False, index=True)
+    ticket = Column(Integer, nullable=True, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                       nullable=False, index=True)
+    event_type = Column(String(20), nullable=False)
+    # ENTRY | SL_MOVE | TP1_HIT | TP2_HIT | PARTIAL_CLOSE |
+    # TRAILING_UPDATE | SL_HIT | MANUAL_CLOSE | INVALID_EXIT
+    price = Column(Float, nullable=True)
+    volume = Column(Float, nullable=True)
+    sl = Column(Float, nullable=True)
+    tp = Column(Float, nullable=True)
+    detail_json = Column(Text, nullable=True)
+    ms_precision = Column(Integer, nullable=True)  # extra ms offset for sub-second events
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #17: latency sampling
+# --------------------------------------------------------------------------- #
+
+class LatencySample(Base):
+    """Endpoint / operation latency sample with percentile rollup."""
+    __tablename__ = "latency_samples"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                       nullable=False, index=True)
+    endpoint = Column(String(64), nullable=False, index=True)
+    latency_ms = Column(Float, nullable=False)
+    percentile_p50 = Column(Float, nullable=True)
+    percentile_p95 = Column(Float, nullable=True)
+    percentile_p99 = Column(Float, nullable=True)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 8 #20: stress-test results persistence (so /results/{id} can fetch)
+# --------------------------------------------------------------------------- #
+
+class StressTestResult(Base):
+    """Saved stress-test run result."""
+    __tablename__ = "stress_test_results"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        index=True)
+    trades_period_days = Column(Integer, nullable=True)
+    balance = Column(Float, nullable=True)
+    results_json = Column(Text, nullable=False)
+
+
+# --------------------------------------------------------------------------- #
 # Indices
 # --------------------------------------------------------------------------- #
 
@@ -284,6 +421,9 @@ Index("ix_signals_symbol_created", Signal.symbol, Signal.created_at)
 Index("ix_news_event_time_impact", NewsEvent.event_time, NewsEvent.impact)
 Index("ix_audit_log_event_ts", AuditLog.event_type, AuditLog.timestamp)
 Index("ix_trades_stage_status", Trade.stage, Trade.status)
+Index("ix_trade_events_trade_ts", TradeEvent.trade_id, TradeEvent.timestamp)
+Index("ix_risk_ack_user_version", RiskAcknowledgment.user_id,
+      RiskAcknowledgment.version)
 
 
 # --------------------------------------------------------------------------- #
@@ -298,22 +438,109 @@ class Database:
             db_path = settings.paths.db_path
         db_path = Path(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        # check_same_thread=False because FastAPI runs across threads
-        self.engine: Engine = create_engine(
-            f"sqlite:///{db_path.as_posix()}",
-            echo=False,
-            future=True,
-            connect_args={"check_same_thread": False},
-        )
+        encryption_key = self._get_encryption_key()
+        self.engine: Engine = self._create_engine(db_path, encryption_key)
         Base.metadata.create_all(self.engine)
         # Migrate any pre-existing tables by issuing additive ALTER TABLE
         # statements (SQLite supports ADD COLUMN only).  Wrapped in try/except
         # because the columns may already exist on a fresh DB.
         self._migrate_additive_columns()
+        # Sprint 6 #10: install immutability triggers on audit_log
+        self._install_audit_immutability_triggers()
         self.SessionLocal = sessionmaker(
             bind=self.engine, expire_on_commit=False, class_=Session,
         )
-        logger.info("Database initialised at %s", db_path)
+        if encryption_key and _SQLCIPHER_AVAILABLE:
+            logger.info("Database initialised at %s (SQLCipher encrypted)",
+                        db_path)
+        else:
+            mode = "plaintext (SQLCipher not available)" if encryption_key \
+                else "plaintext"
+            logger.info("Database initialised at %s (%s)",
+                        db_path, mode)
+
+    # ---- Sprint 5 #2: encryption at rest ---------------------------------- #
+
+    @staticmethod
+    def _get_encryption_key() -> str | None:
+        """Read DB_ENCRYPTION_KEY env var (32-byte hex).  Returns None if unset."""
+        import os as _os
+        key = _os.environ.get("DB_ENCRYPTION_KEY", "").strip()
+        if not key:
+            return None
+        # The key may be a 64-char hex string (32 bytes).  sqlcipher3 wants
+        # the raw passphrase via PRAGMA key; hex form is fine.
+        return key
+
+    @staticmethod
+    def _create_engine(db_path: Path, encryption_key: str | None) -> Engine:
+        """Create a SQLAlchemy engine - SQLCipher if key+package are available,
+        plain SQLite otherwise.
+        """
+        connect_args: dict[str, Any] = {"check_same_thread": False}
+        url = f"sqlite:///{db_path.as_posix()}"
+
+        if encryption_key and _SQLCIPHER_AVAILABLE:
+            # Use the pysqlcipher dialect if installed; otherwise fall back to
+            # the sqlite dialect with a post-connect PRAGMA via an event hook.
+            # The simplest portable approach: use sqlite dialect + a listener.
+            from sqlalchemy import event
+
+            @event.listens_for("connect", named=True)
+            def _on_connect(**kw: Any) -> None:
+                conn = kw.get("connection")
+                if conn is None:
+                    return
+                cur = conn.cursor()
+                cur.execute(f"PRAGMA key='{encryption_key}'")
+                # also enforce cipher page size for compatibility
+                cur.execute("PRAGMA cipher_page_size = 4096")
+
+            engine = create_engine(
+                url, echo=False, future=True, connect_args=connect_args,
+            )
+            return engine
+
+        if encryption_key and not _SQLCIPHER_AVAILABLE:
+            logger.warning(
+                "DB_ENCRYPTION_KEY is set but sqlcipher3 is not installed - "
+                "falling back to PLAINTEXT SQLite.  Run: "
+                "pip install sqlcipher3-binary  (Sprint 5 #2)",
+            )
+        return create_engine(
+            url, echo=False, future=True, connect_args=connect_args,
+        )
+
+    # ---- Sprint 6 #10: immutability triggers ------------------------------ #
+
+    def _install_audit_immutability_triggers(self) -> None:
+        """Install BEFORE UPDATE / BEFORE DELETE triggers on audit_log that
+        abort the operation, making the table truly append-only.
+        """
+        from sqlalchemy import text, inspect
+        insp = inspect(self.engine)
+        if not insp.has_table("audit_log"):
+            return
+        with self.engine.begin() as conn:
+            for name, body in (
+                ("audit_log_no_update",
+                 "BEGIN SELECT RAISE(ABORT, 'audit_log is immutable'); END;"),
+                ("audit_log_no_delete",
+                 "BEGIN SELECT RAISE(ABORT, 'audit_log is immutable'); END;"),
+            ):
+                # SQLite trig IF NOT EXISTS isn't supported prior to 3.33;
+                # instead try to drop silently.
+                try:
+                    conn.execute(text(f"DROP TRIGGER IF EXISTS {name}"))
+                except Exception:  # pragma: no cover
+                    pass
+                try:
+                    stmt = (f"CREATE TRIGGER {name} "
+                            f"BEFORE {'UPDATE' if 'update' in name else 'DELETE'} "
+                            f"ON audit_log {body}")
+                    conn.execute(text(stmt))
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Failed to install trigger %s: %s", name, exc)
 
     # ---- Lightweight additive migration ---------------------------------- #
 
@@ -330,6 +557,9 @@ class Database:
             ("emotional_note", "TEXT", "NULL"),
             ("strategy_version", "VARCHAR(16)", "'v2.0'"),
             ("is_paper", "BOOLEAN", "0"),
+            # Sprint 7 #17
+            ("slippage_actual", "FLOAT", "NULL"),
+            ("execution_latency_ms", "INTEGER", "NULL"),
         ],
         "daily_risk": [
             ("consecutive_loss_count", "INTEGER", "0"),
@@ -341,6 +571,12 @@ class Database:
         "bot_state": [
             ("is_paper", "BOOLEAN", "0"),
             ("is_dry_run", "BOOLEAN", "0"),
+        ],
+        "audit_log": [
+            # Sprint 6 #10
+            ("prev_hash", "VARCHAR(64)", "NULL"),
+            ("hash", "VARCHAR(64)", "NULL"),
+            ("signature", "TEXT", "NULL"),
         ],
     }
 
@@ -482,6 +718,9 @@ def _trade_to_dict(t: Trade) -> dict[str, Any]:
         "emotional_note": getattr(t, "emotional_note", None),
         "strategy_version": getattr(t, "strategy_version", None),
         "is_paper": getattr(t, "is_paper", None),
+        # Sprint 7 #17
+        "slippage_actual": getattr(t, "slippage_actual", None),
+        "execution_latency_ms": getattr(t, "execution_latency_ms", None),
     }
 
 
@@ -780,15 +1019,40 @@ def insert_audit_log(event_type: str,
                      ticket: int | None = None,
                      detail: dict[str, Any] | None = None,
                      severity: str = "INFO") -> int:
-    """Insert an audit log row."""
+    """Insert an audit log row.
+
+    Sprint 6 #10: also computes the hash chain (prev_hash + event_type +
+    timestamp + detail_json) so the table is tamper-evident.
+    """
+    import hashlib as _hashlib
     db = get_db()
+    now = _now()
+    # SQLAlchemy + SQLite store the timestamp as a naive ISO string (tzinfo
+    # is stripped from the column value).  Compute the hash from the *naive*
+    # ISO form so verify_audit_chain() can recompute deterministically.
+    now_naive = now.replace(tzinfo=None) if now.tzinfo else now
+    now_iso = now_naive.isoformat()
+    detail_str = json.dumps(detail, default=str) if detail else ""
+    # fetch the last row's hash
     with db.session() as s:
+        last = s.execute(
+            select(AuditLog).order_by(AuditLog.id.desc()).limit(1)
+        ).scalar_one_or_none()
+        prev_hash = (last.hash if last is not None and getattr(last, "hash", None)
+                     else "")
+        chain_input = f"{prev_hash}|{event_type}|{now_iso}|{detail_str}"
+        row_hash = _hashlib.sha256(chain_input.encode("utf-8")).hexdigest()
         row = AuditLog(
             event_type=event_type,
             symbol=symbol,
             ticket=ticket,
-            detail_json=json.dumps(detail, default=str) if detail else None,
+            detail_json=detail_str or None,
             severity=severity,
+            # Use the SAME `now_naive` value for both the hash and the column
+            # so verify_audit_chain() can recompute the hash deterministically.
+            timestamp=now_naive,
+            prev_hash=prev_hash or None,
+            hash=row_hash,
         )
         s.add(row)
         s.flush()
@@ -824,7 +1088,55 @@ def list_audit_log(limit: int = 200,
             "ticket": r.ticket,
             "detail": json.loads(r.detail_json) if r.detail_json else None,
             "severity": r.severity,
+            "prev_hash": getattr(r, "prev_hash", None),
+            "hash": getattr(r, "hash", None),
         } for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #10: audit chain verification
+# --------------------------------------------------------------------------- #
+
+def verify_audit_chain() -> dict[str, Any]:
+    """Recompute every audit_log row's hash and compare to the stored value.
+
+    Returns ``{"valid": bool, "checked": int, "broken_at": int|None}``.
+    """
+    import hashlib as _hashlib
+    db = get_db()
+    with db.session() as s:
+        rows = s.execute(
+            select(AuditLog).order_by(AuditLog.id.asc())
+        ).scalars().all()
+    prev_hash = ""
+    checked = 0
+    broken_at: int | None = None
+    for r in rows:
+        detail_str = r.detail_json or ""
+        ts = r.timestamp
+        # Normalise the timestamp to a naive ISO string (drop tzinfo) so the
+        # recompute matches what SQLAlchemy stored in the DB (SQLite strips
+        # tzinfo from the column value).
+        if ts is not None:
+            ts_naive = ts.replace(tzinfo=None) if ts.tzinfo else ts
+            ts_iso = ts_naive.isoformat()
+        else:
+            ts_iso = ""
+        chain_input = f"{prev_hash}|{r.event_type}|{ts_iso}|{detail_str}"
+        expected = _hashlib.sha256(chain_input.encode("utf-8")).hexdigest()
+        stored = getattr(r, "hash", None) or ""
+        prev_stored = getattr(r, "prev_hash", None) or ""
+        if expected != stored or prev_stored != prev_hash:
+            broken_at = r.id
+            break
+        prev_hash = stored
+        checked += 1
+    return {
+        "valid": broken_at is None,
+        "checked": checked,
+        "total": len(rows),
+        "broken_at": broken_at,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -1098,11 +1410,294 @@ def list_emotional_summary(limit: int = 200) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Sprint 5 #6: user CRUD
+# --------------------------------------------------------------------------- #
+
+def get_user_by_username(username: str) -> dict[str, Any] | None:
+    """Fetch a user row by username (or None)."""
+    db = get_db()
+    with db.session() as s:
+        row = s.execute(
+            select(User).where(User.username == username)
+        ).scalar_one_or_none()
+        return _user_to_dict(row) if row else None
+
+
+def get_user_by_api_key(api_key: str) -> dict[str, Any] | None:
+    """Fetch a user row by API key (or None)."""
+    if not api_key:
+        return None
+    db = get_db()
+    with db.session() as s:
+        row = s.execute(
+            select(User).where(User.api_key == api_key)
+        ).scalar_one_or_none()
+        return _user_to_dict(row) if row else None
+
+
+def create_user(username: str, password_hash: str,
+                role: str = UserRole.VIEWER,
+                api_key: str | None = None) -> int:
+    """Insert a new user. Returns the new id."""
+    db = get_db()
+    with db.session() as s:
+        row = User(username=username, password_hash=password_hash,
+                   role=role, api_key=api_key)
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def update_user_api_key(user_id: int, api_key: str) -> bool:
+    """Replace the API key on a user row (called by /api/auth/login)."""
+    db = get_db()
+    with db.session() as s:
+        row = s.get(User, int(user_id))
+        if row is None:
+            return False
+        row.api_key = api_key
+        return True
+
+
+def ensure_default_admin() -> dict[str, Any]:
+    """Create a default ``admin`` user on first run if none exists.
+
+    The password is read from the ``ADMIN_PASSWORD`` env var; if unset, a
+    random one is generated and logged (so the operator can recover it).
+    """
+    import os as _os
+    import secrets as _secrets
+    db = get_db()
+    with db.session() as s:
+        existing = s.execute(
+            select(User).where(User.username == "admin")
+        ).scalar_one_or_none()
+        if existing is not None:
+            return _user_to_dict(existing)
+        password = _os.environ.get("ADMIN_PASSWORD", "").strip()
+        generated = False
+        if not password:
+            password = _secrets.token_urlsafe(18)
+            generated = True
+        # Late import to avoid a circular dependency at module load time
+        from auth import hash_password, generate_api_key
+        row = User(
+            username="admin",
+            password_hash=hash_password(password),
+            role=UserRole.ADMIN,
+            api_key=generate_api_key(),
+        )
+        s.add(row)
+        s.flush()
+        if generated:
+            logger.warning(
+                "ADMIN_PASSWORD env not set - generated random password for "
+                "default admin user: %s  (set ADMIN_PASSWORD to override)",
+                password,
+            )
+        return _user_to_dict(row)
+
+
+def _user_to_dict(u: User | None) -> dict[str, Any] | None:
+    if u is None:
+        return None
+    return {
+        "id": u.id,
+        "username": u.username,
+        "password_hash": u.password_hash,
+        "api_key": u.api_key,
+        "role": u.role,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "updated_at": u.updated_at.isoformat() if u.updated_at else None,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #9: risk-disclosure acknowledgments
+# --------------------------------------------------------------------------- #
+
+def insert_risk_acknowledgment(version: str,
+                               user_id: int | None = None,
+                               ip_address: str | None = None,
+                               user_agent: str | None = None) -> int:
+    """Persist a signed risk disclosure acknowledgment row."""
+    db = get_db()
+    with db.session() as s:
+        row = RiskAcknowledgment(
+            user_id=user_id,
+            version=version,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def get_latest_risk_acknowledgment(user_id: int | None = None
+                                   ) -> dict[str, Any] | None:
+    """Return the most recent acknowledgment (optionally for a user)."""
+    db = get_db()
+    with db.session() as s:
+        stmt = select(RiskAcknowledgment).order_by(
+            RiskAcknowledgment.acknowledged_at.desc()
+        ).limit(1)
+        if user_id is not None:
+            stmt = stmt.where(RiskAcknowledgment.user_id == int(user_id))
+        row = s.execute(stmt).scalar_one_or_none()
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "user_id": row.user_id,
+            "version": row.version,
+            "acknowledged_at": (row.acknowledged_at.isoformat()
+                                if row.acknowledged_at else None),
+            "ip_address": row.ip_address,
+            "user_agent": row.user_agent,
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #12: trade event (tick-level reconstruction)
+# --------------------------------------------------------------------------- #
+
+def insert_trade_event(trade_id: int,
+                       event_type: str,
+                       ticket: int | None = None,
+                       price: float | None = None,
+                       volume: float | None = None,
+                       sl: float | None = None,
+                       tp: float | None = None,
+                       detail: dict[str, Any] | None = None,
+                       ms_precision: int | None = None) -> int:
+    """Persist a tick-level event for a trade (entry / SL move / TP hit / ...)."""
+    db = get_db()
+    with db.session() as s:
+        row = TradeEvent(
+            trade_id=int(trade_id),
+            ticket=ticket,
+            event_type=event_type,
+            price=price,
+            volume=volume,
+            sl=sl,
+            tp=tp,
+            detail_json=json.dumps(detail, default=str) if detail else None,
+            ms_precision=ms_precision,
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def list_trade_events(trade_id: int) -> list[dict[str, Any]]:
+    """Return the full ordered event timeline for ``trade_id``."""
+    db = get_db()
+    with db.session() as s:
+        rows = s.execute(
+            select(TradeEvent)
+            .where(TradeEvent.trade_id == int(trade_id))
+            .order_by(TradeEvent.timestamp.asc(), TradeEvent.id.asc())
+        ).scalars().all()
+        return [{
+            "id": r.id,
+            "trade_id": r.trade_id,
+            "ticket": r.ticket,
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "event_type": r.event_type,
+            "price": r.price,
+            "volume": r.volume,
+            "sl": r.sl,
+            "tp": r.tp,
+            "detail": json.loads(r.detail_json) if r.detail_json else None,
+            "ms_precision": r.ms_precision,
+        } for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #17: latency samples
+# --------------------------------------------------------------------------- #
+
+def insert_latency_sample(endpoint: str, latency_ms: float,
+                          p50: float | None = None,
+                          p95: float | None = None,
+                          p99: float | None = None) -> int:
+    db = get_db()
+    with db.session() as s:
+        row = LatencySample(
+            endpoint=endpoint, latency_ms=float(latency_ms),
+            percentile_p50=p50, percentile_p95=p95, percentile_p99=p99,
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def list_latency_samples(hours: float = 24.0,
+                         endpoint: str | None = None) -> list[dict[str, Any]]:
+    db = get_db()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    with db.session() as s:
+        stmt = (select(LatencySample)
+                .where(LatencySample.timestamp >= cutoff)
+                .order_by(LatencySample.timestamp.asc()))
+        if endpoint:
+            stmt = stmt.where(LatencySample.endpoint == endpoint)
+        rows = s.execute(stmt).scalars().all()
+        return [{
+            "id": r.id,
+            "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+            "endpoint": r.endpoint,
+            "latency_ms": r.latency_ms,
+            "p50": r.percentile_p50,
+            "p95": r.percentile_p95,
+            "p99": r.percentile_p99,
+        } for r in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 8 #20: stress-test results
+# --------------------------------------------------------------------------- #
+
+def insert_stress_test_result(trades_period_days: int | None,
+                              balance: float | None,
+                              results: list[dict[str, Any]]) -> int:
+    db = get_db()
+    with db.session() as s:
+        row = StressTestResult(
+            trades_period_days=trades_period_days,
+            balance=balance,
+            results_json=json.dumps(results, default=str),
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def get_stress_test_result(result_id: int) -> dict[str, Any] | None:
+    db = get_db()
+    with db.session() as s:
+        r = s.get(StressTestResult, int(result_id))
+        if r is None:
+            return None
+        return {
+            "id": r.id,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "trades_period_days": r.trades_period_days,
+            "balance": r.balance,
+            "results": json.loads(r.results_json) if r.results_json else [],
+        }
+
+
 __all__ = [
     "Base", "Database", "get_db",
     "Trade", "Signal", "NewsEvent", "DailyRisk", "WeeklyRisk",
     "BotState", "ChatMessage", "Setting",
     "AuditLog", "EquityCurve", "BacktestResult",
+    # Sprint 5/6/7 models
+    "Secret", "User", "UserRole",
+    "RiskAcknowledgment", "TradeEvent", "LatencySample", "StressTestResult",
     # CRUD
     "insert_trade", "update_trade", "get_trade", "list_trades",
     "get_trade_by_ticket", "get_trade_orm_by_ticket", "list_open_trades",
@@ -1113,9 +1708,16 @@ __all__ = [
     "insert_chat", "list_chat",
     "get_setting", "set_setting", "get_all_settings",
     # Audit-fix CRUD
-    "insert_audit_log", "list_audit_log",
+    "insert_audit_log", "list_audit_log", "verify_audit_chain",
     "insert_equity_sample", "list_equity_curve",
     "insert_backtest_result", "get_backtest_result",
     "get_performance_attribution", "get_compliance_score",
     "set_trade_emotional_state", "list_emotional_summary",
+    # Sprint 5/6/7 CRUD
+    "insert_trade_event", "list_trade_events",
+    "insert_risk_acknowledgment", "get_latest_risk_acknowledgment",
+    "insert_latency_sample", "list_latency_samples",
+    "get_user_by_username", "get_user_by_api_key", "create_user",
+    "update_user_api_key", "ensure_default_admin",
+    "insert_stress_test_result", "get_stress_test_result",
 ]

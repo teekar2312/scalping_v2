@@ -1,0 +1,46 @@
+# Frontend .dockerignore (Sprint 8 #18)
+
+# Node / Next
+node_modules/
+.next/
+out/
+dist/
+
+# Bun
+bun.lockb
+.bun/
+
+# Tests
+__tests__/
+*.spec.ts
+*.test.ts
+coverage/
+
+# Editor / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+dev.log
+server.log
+
+# Backend (separate image)
+download/
+
+# Misc
+README.md
+*.md
+upload/
+examples/
+tests/
+Caddyfile

@@ -19,6 +19,9 @@ import {
   ShieldCheck,
   Smile,
   Loader2,
+  GitBranch,
+  Clock,
+  ArrowRight,
 } from 'lucide-react';
 import { PanelCard, StatCard } from '../shared';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +46,9 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
+  ScrollArea,
+} from '@/components/ui/scroll-area';
+import {
   getTradeHistory,
   getPerformanceAttribution,
   getComplianceScore,
@@ -51,6 +57,7 @@ import {
   downloadPDF,
   downloadTax,
   triggerDownload,
+  getTradeReconstruction,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
@@ -62,6 +69,9 @@ import type {
   EmotionalSummaryResponse,
   SessionStats,
   EmotionalState,
+  TradeReconstruction,
+  TradeEvent,
+  TradeEventType,
 } from '@/lib/types';
 
 function fmtWeekStart(): string {
@@ -274,6 +284,229 @@ function EmotionLogModal({
   );
 }
 
+// --------------------------------------------------------------------------- //
+// Sprint 7 — Trade reconstruction modal (tick-level timeline)
+// --------------------------------------------------------------------------- //
+
+const EVENT_TYPE_COLOR: Record<TradeEventType, string> = {
+  ENTRY: 'text-info border-info',
+  SL_MOVE: 'text-warn border-warn',
+  BE_MOVE: 'text-bull border-bull',
+  TP1_HIT: 'text-bull border-bull',
+  TP2_HIT: 'text-bull border-bull',
+  TRAILING: 'text-info border-info',
+  PARTIAL_CLOSE: 'text-info border-info',
+  EXIT: 'text-bear border-bear',
+  MANUAL_CLOSE: 'text-bear border-bear',
+};
+
+const EVENT_TYPE_LABEL: Record<TradeEventType, string> = {
+  ENTRY: 'Entry',
+  SL_MOVE: 'SL Move',
+  BE_MOVE: 'Break-Even',
+  TP1_HIT: 'TP1 Hit',
+  TP2_HIT: 'TP2 Hit',
+  TRAILING: 'Trailing Update',
+  PARTIAL_CLOSE: 'Partial Close',
+  EXIT: 'Exit',
+  MANUAL_CLOSE: 'Manual Close',
+};
+
+function fmtTimeShort(iso: string): string {
+  return new Date(iso).toLocaleString('id-ID', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Jakarta',
+  });
+}
+
+function TradeReconstructionModal({
+  trade,
+  open,
+  onOpenChange,
+}: {
+  trade: Trade | null;
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+}) {
+  const [recon, setRecon] = useState<TradeReconstruction | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !trade) return;
+    let mounted = true;
+    let cancelled = false;
+    // Reset + flip loading asynchronously (after mount commit) to avoid
+    // the `react-hooks/set-state-in-effect` warning.
+    Promise.resolve().then(() => {
+      if (cancelled) return;
+      setRecon(null);
+      setLoading(true);
+    });
+    getTradeReconstruction(trade.ticket)
+      .then((r) => {
+        if (mounted) setRecon(r);
+      })
+      .catch((e) => {
+        toast({
+          title: 'Reconstruction gagal',
+          description: String(e),
+          variant: 'destructive',
+        });
+      })
+      .finally(() => mounted && setLoading(false));
+    return () => {
+      mounted = false;
+      cancelled = true;
+    };
+  }, [open, trade]);
+
+  if (!trade) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <GitBranch className="h-5 w-5 text-info" />
+            Trade Reconstruction · #{trade.ticket}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            {trade.symbol} {trade.direction} · vol {trade.volume} lot · tick-level
+            timeline dari entry → exit, termasuk semua SL/TP/trailing events.
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12 text-xs text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            Reconstructing tick timeline…
+          </div>
+        ) : recon ? (
+          <div className="space-y-4">
+            {/* Summary row */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div className="rounded-md border p-2">
+                <div className="text-[10px] text-muted-foreground">Entry</div>
+                <div className="font-mono tabular-nums">{recon.entry_price}</div>
+                <div className="text-[10px] text-muted-foreground">{fmtTimeShort(recon.entry_time)}</div>
+              </div>
+              <div className="rounded-md border p-2">
+                <div className="text-[10px] text-muted-foreground">Exit</div>
+                <div className="font-mono tabular-nums">{recon.exit_price ?? '—'}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {recon.exit_time ? fmtTimeShort(recon.exit_time) : '—'}
+                </div>
+              </div>
+              <div className="rounded-md border p-2">
+                <div className="text-[10px] text-muted-foreground">Final P&L</div>
+                <div
+                  className={cn(
+                    'font-mono tabular-nums font-semibold',
+                    (recon.final_pnl ?? 0) >= 0 ? 'text-bull' : 'text-bear',
+                  )}
+                >
+                  {(recon.final_pnl ?? 0) >= 0 ? '+' : ''}
+                  {recon.final_pnl?.toFixed(2) ?? '—'} USD
+                </div>
+              </div>
+              <div className="rounded-md border p-2">
+                <div className="text-[10px] text-muted-foreground">R-Multiple</div>
+                <div
+                  className={cn(
+                    'font-mono tabular-nums font-semibold',
+                    (recon.r_multiple ?? 0) >= 0 ? 'text-bull' : 'text-bear',
+                  )}
+                >
+                  {(recon.r_multiple ?? 0) >= 0 ? '+' : ''}
+                  {recon.r_multiple?.toFixed(2) ?? '—'}R
+                </div>
+                <div className="text-[10px] text-muted-foreground">{recon.close_reason}</div>
+              </div>
+            </div>
+
+            {/* Vertical timeline */}
+            <ScrollArea className="h-[400px] rounded-md border p-3">
+              <div className="relative">
+                {/* Vertical line */}
+                <div className="absolute left-3 top-0 bottom-0 w-px bg-border" />
+                <div className="space-y-3">
+                  {recon.events.map((ev, idx) => {
+                    const color = EVENT_TYPE_COLOR[ev.type];
+                    return (
+                      <div key={idx} className="relative pl-9">
+                        {/* Dot on the timeline */}
+                        <div
+                          className={cn(
+                            'absolute left-1.5 top-1 h-3 w-3 rounded-full border-2',
+                            color,
+                          )}
+                        />
+                        <div className="rounded-md border bg-card p-2 text-xs">
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <Badge variant="outline" className={cn('text-[10px]', color)}>
+                              {EVENT_TYPE_LABEL[ev.type]}
+                            </Badge>
+                            <span className="text-[10px] text-muted-foreground tabular-nums flex items-center gap-0.5">
+                              <Clock className="h-2.5 w-2.5" />
+                              {fmtTimeShort(ev.timestamp)}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
+                            <span>
+                              <span className="text-muted-foreground">Price: </span>
+                              <span className="font-mono tabular-nums">{ev.price}</span>
+                            </span>
+                            {ev.volume !== undefined && (
+                              <span>
+                                <span className="text-muted-foreground">Vol: </span>
+                                <span className="font-mono tabular-nums">{ev.volume}</span>
+                              </span>
+                            )}
+                            {ev.sl_old !== undefined && ev.sl_old !== null && (
+                              <span className="flex items-center gap-1">
+                                <span className="font-mono tabular-nums">{ev.sl_old}</span>
+                                <ArrowRight className="h-2.5 w-2.5 text-muted-foreground" />
+                                <span className="font-mono tabular-nums">{ev.sl_new}</span>
+                              </span>
+                            )}
+                          </div>
+                          {ev.reason && (
+                            <p className="mt-1 text-[10px] text-muted-foreground italic">{ev.reason}</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </ScrollArea>
+
+            <div className="rounded-md border border-info/30 bg-info/5 p-2 text-[10px] text-info">
+              <strong>Sprint 7 — Trade Reconstruction:</strong> Replay tick-level
+              event log dari trade lifecycle. Berguna untuk audit post-trade:
+              apakah SL dipindahkan tepat waktu? Apakah TP1 hit dan SL dipindah ke BE?
+              Apakah trailing aktif saat trend continuation?
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground py-8 text-center">
+            Tidak ada data reconstruction.
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Tutup
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function CircularProgress({ value, color }: { value: number; color: string }) {
   return (
     <div className="flex flex-col items-center">
@@ -312,6 +545,7 @@ export function JournalView() {
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingTax, setExportingTax] = useState(false);
   const [emotionTrade, setEmotionTrade] = useState<Trade | null>(null);
+  const [reconTrade, setReconTrade] = useState<Trade | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -627,15 +861,26 @@ export function JournalView() {
                             </div>
                           </td>
                           <td className="text-right">
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 px-2 text-[10px] gap-1"
-                              onClick={() => setEmotionTrade(t)}
-                            >
-                              <Smile className="h-3 w-3" />
-                              Tag
-                            </Button>
+                            <div className="flex gap-1 justify-end">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-2 text-[10px] gap-1"
+                                onClick={() => setReconTrade(t)}
+                              >
+                                <GitBranch className="h-3 w-3" />
+                                Replay
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-2 text-[10px] gap-1"
+                                onClick={() => setEmotionTrade(t)}
+                              >
+                                <Smile className="h-3 w-3" />
+                                Tag
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -865,6 +1110,12 @@ export function JournalView() {
         trade={emotionTrade}
         open={emotionTrade !== null}
         onOpenChange={(v) => !v && setEmotionTrade(null)}
+      />
+
+      <TradeReconstructionModal
+        trade={reconTrade}
+        open={reconTrade !== null}
+        onOpenChange={(v) => !v && setReconTrade(null)}
       />
     </div>
   );

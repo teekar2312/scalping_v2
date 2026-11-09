@@ -463,4 +463,234 @@ class BacktestEngine:
 __all__ = [
     "BacktestEngine", "BacktestResult", "BacktestTrade",
     "load_candles_from_csv",
+    "MonteCarloEngine", "MonteCarloResult",
+    "WalkForwardAnalyzer", "WalkForwardResult",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #15: Monte Carlo simulation
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class MonteCarloResult:
+    """Result of a Monte-Carlo bootstrap resample run."""
+    iterations: int
+    median_final_balance: float
+    p5_final: float
+    p95_final: float
+    median_max_dd_pct: float
+    p95_max_dd_pct: float
+    survival_rate: float         # fraction of runs where final balance > 0
+    median_profit_factor: float
+
+
+class MonteCarloEngine:
+    """Bootstrap-resample the trade order and compute distribution stats.
+
+    Two resampling modes:
+      * ``"trade_resample"``      - shuffle trade order (with replacement)
+      * ``"return_perturbation"`` - add Gaussian noise of ``noise_std`` to each
+        return before simulating the equity curve.
+    """
+
+    def __init__(self, initial_balance: float = 10_000.0,
+                 seed: int | None = None) -> None:
+        self.initial_balance = initial_balance
+        import random
+        self._rng = random.Random(seed)
+
+    def run(self, trades: list[dict[str, Any]],
+            iterations: int = 1000,
+            mode: str = "trade_resample",
+            noise_std: float = 0.0) -> MonteCarloResult:
+        """Run ``iterations`` bootstrap resamples.
+
+        Each trade dict should have a ``profit`` (float) field.
+        Returns a :class:`MonteCarloResult`.
+        """
+        if not trades:
+            return MonteCarloResult(0, self.initial_balance,
+                                    self.initial_balance,
+                                    self.initial_balance,
+                                    0.0, 0.0, 1.0, 0.0)
+        pnls = []
+        for t in trades:
+            try:
+                pnls.append(float(t.get("profit") or t.get("pnl") or 0.0))
+            except (TypeError, ValueError):
+                continue
+        if not pnls:
+            return MonteCarloResult(0, self.initial_balance,
+                                    self.initial_balance,
+                                    self.initial_balance,
+                                    0.0, 0.0, 1.0, 0.0)
+
+        final_balances: list[float] = []
+        max_dds: list[float] = []
+        profit_factors: list[float] = []
+        n = len(pnls)
+        for _ in range(max(1, int(iterations))):
+            if mode == "return_perturbation" and noise_std > 0:
+                sample = [p + self._rng.gauss(0, noise_std) for p in pnls]
+            else:
+                sample = [self._rng.choice(pnls) for _ in range(n)]
+            bal = self.initial_balance
+            peak = bal
+            worst_dd = 0.0
+            gross_win = 0.0
+            gross_loss = 0.0
+            for p in sample:
+                bal += p
+                if bal > peak:
+                    peak = bal
+                dd = (bal - peak) / peak if peak > 0 else 0.0
+                if dd < worst_dd:
+                    worst_dd = dd
+                if p > 0:
+                    gross_win += p
+                elif p < 0:
+                    gross_loss += abs(p)
+            final_balances.append(bal)
+            max_dds.append(abs(worst_dd))
+            pf = (gross_win / gross_loss) if gross_loss > 0 else 0.0
+            profit_factors.append(pf)
+        final_balances.sort()
+        max_dds.sort()
+        profit_factors.sort()
+        survival = sum(1 for b in final_balances if b > 0) / len(final_balances)
+
+        def _pct(arr: list[float], p: float) -> float:
+            if not arr:
+                return 0.0
+            idx = int(p * (len(arr) - 1))
+            return arr[idx]
+
+        return MonteCarloResult(
+            iterations=len(final_balances),
+            median_final_balance=round(_pct(final_balances, 0.5), 2),
+            p5_final=round(_pct(final_balances, 0.05), 2),
+            p95_final=round(_pct(final_balances, 0.95), 2),
+            median_max_dd_pct=round(_pct(max_dds, 0.5), 4),
+            p95_max_dd_pct=round(_pct(max_dds, 0.95), 4),
+            survival_rate=round(survival, 4),
+            median_profit_factor=round(_pct(profit_factors, 0.5), 4),
+        )
+
+    def run_trade_resample(self, trades: list[dict[str, Any]],
+                           iterations: int = 1000) -> MonteCarloResult:
+        """Shortcut for ``mode='trade_resample'``."""
+        return self.run(trades, iterations, mode="trade_resample")
+
+    def run_return_perturbation(self, trades: list[dict[str, Any]],
+                                iterations: int = 1000,
+                                noise_std: float = 0.0
+                                ) -> MonteCarloResult:
+        """Shortcut for ``mode='return_perturbation'``."""
+        return self.run(trades, iterations, mode="return_perturbation",
+                        noise_std=noise_std)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #15: Walk-forward analysis
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class WalkForwardResult:
+    """Result of a rolling-window walk-forward optimization."""
+    windows: list[dict[str, Any]]
+    avg_degradation_pct: float
+
+
+class WalkForwardAnalyzer:
+    """Walk-forward optimization rolling window.
+
+    For each window we:
+      * Optimize a parameter set on the in-sample window (here: pick the best
+        of a small discrete grid over ADX threshold, ATR mult, EMA periods).
+      * Apply that parameter set to the out-of-sample window and measure the
+        profit-factor degradation.
+    """
+
+    def __init__(self, initial_balance: float = 10_000.0) -> None:
+        self.initial_balance = initial_balance
+
+    # ---- parameter grid ---- #
+
+    _PARAM_GRID: list[dict[str, Any]] = [
+        {"adx_threshold": 20, "atr_mult": 1.0, "ema_period": 9},
+        {"adx_threshold": 22, "atr_mult": 1.2, "ema_period": 12},
+        {"adx_threshold": 25, "atr_mult": 1.5, "ema_period": 14},
+        {"adx_threshold": 28, "atr_mult": 1.8, "ema_period": 18},
+        {"adx_threshold": 30, "atr_mult": 2.0, "ema_period": 21},
+    ]
+
+    def _profit_factor(self, trades: list[dict[str, Any]]) -> float:
+        gross_win = sum(p for t in trades
+                        if (p := float(t.get("profit") or 0.0)) > 0)
+        gross_loss = sum(abs(p) for t in trades
+                         if (p := float(t.get("profit") or 0.0)) < 0)
+        return (gross_win / gross_loss) if gross_loss > 0 else 0.0
+
+    def _score_params(self, trades: list[dict[str, Any]],
+                      params: dict[str, Any]) -> float:
+        """Score = profit factor, but penalise when ADX threshold filters
+        out all trades (degenerate).
+        """
+        if not trades:
+            return 0.0
+        # Naive proxy: filter trades where adx >= threshold
+        adx_t = params.get("adx_threshold", 25)
+        filtered = [t for t in trades
+                    if (t.get("adx") is None
+                        or float(t.get("adx") or 0) >= adx_t)]
+        if not filtered:
+            return 0.0
+        return self._profit_factor(filtered)
+
+    def run(self, trades: list[dict[str, Any]],
+            in_sample_window: int = 90,
+            out_sample_window: int = 30) -> WalkForwardResult:
+        """Run a rolling walk-forward optimization.
+
+        ``trades`` should be a chronologically-sorted list of trade dicts
+        with ``profit`` and ``adx`` fields.  The windows are expressed in
+        number-of-trades (not days) so this works for any frequency.
+        """
+        if len(trades) < in_sample_window + out_sample_window:
+            return WalkForwardResult([], 0.0)
+        windows: list[dict[str, Any]] = []
+        degradations: list[float] = []
+        step = max(1, out_sample_window)
+        start = 0
+        while start + in_sample_window + out_sample_window <= len(trades):
+            in_sample = trades[start:start + in_sample_window]
+            out_sample = trades[start + in_sample_window:
+                                start + in_sample_window + out_sample_window]
+            # Optimize: pick the parameter set with the highest in-sample PF
+            best_params = self._PARAM_GRID[0]
+            best_in_pf = self._score_params(in_sample, best_params)
+            for params in self._PARAM_GRID[1:]:
+                pf = self._score_params(in_sample, params)
+                if pf > best_in_pf:
+                    best_in_pf = pf
+                    best_params = params
+            # Apply best params to out-sample
+            out_pf = self._score_params(out_sample, best_params)
+            degradation = ((best_in_pf - out_pf) / best_in_pf
+                           if best_in_pf > 0 else 0.0)
+            windows.append({
+                "start_index": start,
+                "end_index": start + in_sample_window + out_sample_window,
+                "params": best_params,
+                "in_sample_pf": round(best_in_pf, 4),
+                "out_sample_pf": round(out_pf, 4),
+                "degradation_pct": round(degradation * 100, 2),
+            })
+            degradations.append(max(0.0, degradation) * 100)
+            start += step
+        avg_deg = (sum(degradations) / len(degradations)) if degradations else 0.0
+        return WalkForwardResult(
+            windows=windows,
+            avg_degradation_pct=round(avg_deg, 2),
+        )

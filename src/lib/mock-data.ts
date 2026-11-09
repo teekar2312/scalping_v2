@@ -30,6 +30,28 @@ import type {
   ServiceTestResult,
   SetupType,
   SessionName,
+  AuthLoginResponse,
+  AuthMeResponse,
+  ApiKeyInfo,
+  SecretMetadata,
+  RiskDisclosureStatus,
+  StressScenario,
+  StressTestResult,
+  RiskMetrics,
+  MonteCarloRequest,
+  MonteCarloResult,
+  WalkForwardRequest,
+  WalkForwardResult,
+  KellyStats,
+  SlippageStats,
+  LatencyStats,
+  ReadinessResponse,
+  HealthzResponse,
+  TradeReconstruction,
+  AuditChainVerifyResponse,
+  BappebtiStatus,
+  EncryptionStatus,
+  VaRMethod,
 } from './types';
 import {
   PRE_TRADE_CHECKLIST,
@@ -952,3 +974,485 @@ export function getDemoServiceTest(service: 'mt5' | 'ollama' | 'tiingo' | 'teleg
 }
 
 export const DEMO_RISK_DISCLOSURE_TEXT = getDemoRiskDisclosure().text;
+
+// --------------------------------------------------------------------------- //
+// Sprint 5-8 demo data — auth, secrets, regulatory, analytics, DevOps
+// --------------------------------------------------------------------------- //
+
+const DEMO_USER = {
+  username: 'admin',
+  role: 'admin' as const,
+  login_at: new Date().toISOString(),
+  ip: '192.168.1.42',
+};
+
+export function getDemoAuthLogin(username: string): AuthLoginResponse {
+  const id = Math.random().toString(36).slice(2, 12);
+  return {
+    api_key: `sk_demo_${id}_${Math.random().toString(36).slice(2, 28)}`,
+    expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+    user: { ...DEMO_USER, username: username || DEMO_USER.username },
+  };
+}
+
+export function getDemoAuthMe(): AuthMeResponse {
+  return {
+    user: DEMO_USER,
+    api_key_preview: 'sk_demo_••••••8f3a',
+    expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+  };
+}
+
+export function getDemoApiKeys(): ApiKeyInfo[] {
+  return [
+    {
+      id: 'key_1',
+      label: 'Web Dashboard',
+      prefix: 'sk_demo_abcd',
+      created_at: new Date(Date.now() - 7 * 86400_000).toISOString(),
+      last_used: new Date(Date.now() - 3600_000).toISOString(),
+      expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+    },
+    {
+      id: 'key_2',
+      label: 'Mobile App',
+      prefix: 'sk_demo_efgh',
+      created_at: new Date(Date.now() - 30 * 86400_000).toISOString(),
+      last_used: new Date(Date.now() - 5 * 86400_000).toISOString(),
+      expires_at: null,
+    },
+  ];
+}
+
+export function getDemoSecrets(): SecretMetadata[] {
+  return [
+    {
+      name: 'MT5_PASSWORD',
+      updated_at: new Date(Date.now() - 12 * 86400_000).toISOString(),
+      set_by: 'admin',
+    },
+    {
+      name: 'TIINGO_API_KEY',
+      updated_at: new Date(Date.now() - 30 * 86400_000).toISOString(),
+      set_by: 'admin',
+    },
+    {
+      name: 'TELEGRAM_BOT_TOKEN',
+      updated_at: new Date(Date.now() - 18 * 86400_000).toISOString(),
+      set_by: 'admin',
+    },
+    {
+      name: 'OLLAMA_URL',
+      updated_at: new Date(Date.now() - 60 * 86400_000).toISOString(),
+      set_by: 'admin',
+    },
+  ];
+}
+
+export function getDemoRiskDisclosureStatus(): RiskDisclosureStatus {
+  const ackAt = new Date(Date.now() - 12 * 86400_000);
+  const expiresAt = new Date(ackAt.getTime() + 30 * 86400_000);
+  const daysRemaining = Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 86400_000));
+  return {
+    acknowledged: true,
+    acknowledged_at: ackAt.toISOString(),
+    acknowledged_by: 'admin',
+    expires_at: expiresAt.toISOString(),
+    days_remaining: daysRemaining,
+    requires_reack: daysRemaining < 7,
+  };
+}
+
+export function getDemoAuditChainVerify(): AuditChainVerifyResponse {
+  return {
+    valid: true,
+    total_rows: 1247,
+    verified_rows: 1247,
+    broken_at_row: null,
+    broken_at_id: null,
+    expected_hash: null,
+    actual_hash: null,
+    verified_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoBappebtiStatus(): BappebtiStatus {
+  return {
+    registered: true,
+    broker_name: 'Finex Indonesia (PT Finex Indosurya Berjangka)',
+    bappebti_license: '135/BAPPEBTI/SI/XII/2007',
+    status: 'REGISTERED',
+    last_checked: new Date(Date.now() - 3600_000).toISOString(),
+    warnings: [],
+  };
+}
+
+export function getDemoEncryptionStatus(): EncryptionStatus {
+  return {
+    enabled: true,
+    cipher: 'sqlcipher',
+    kdf_iters: 64000,
+    page_size: 4096,
+    tested_at: new Date(Date.now() - 3600_000).toISOString(),
+  };
+}
+
+// --- Stress test scenarios + results ---------------------------------------- //
+
+export function getDemoStressScenarios(): StressScenario[] {
+  return [
+    {
+      id: 'SNB_UNPEG_2015',
+      name: 'SNB Unpeg (Jan 15, 2015)',
+      description:
+        'Swiss National Bank removed the EUR/CHF floor; CHF pairs spiked ~30% in minutes. EUR/CHF liquidity evaporated; brokers failed.',
+      date: '2015-01-15',
+      multiplier: 8.5,
+      pip_jump: 2200,
+      asset_class: 'CHF majors',
+    },
+    {
+      id: 'BREXIT_2016',
+      name: 'Brexit Vote (Jun 24, 2016)',
+      description:
+        'GBP referendum shock — GBP/USD dropped 8% overnight (1800 pip equivalent move). GBP pairs gapped at session open.',
+      date: '2016-06-24',
+      multiplier: 4.2,
+      pip_jump: 1800,
+      asset_class: 'GBP majors',
+    },
+    {
+      id: 'COVID_CRASH_2020',
+      name: 'COVID Crash (Mar 2020)',
+      description:
+        'Global dollar squeeze — USD/JPY whipsawed 600 pips intraday over 2 weeks. VIX > 80. Spread widened to 5-15 pips on majors.',
+      date: '2020-03-09',
+      multiplier: 3.5,
+      pip_jump: 600,
+      asset_class: 'USD majors',
+    },
+    {
+      id: 'GFC_2008',
+      name: 'Global Financial Crisis (Sep-Oct 2008)',
+      description:
+        'Lehman collapse — EUR/USD moved 800+ pips over days with multi-pip gaps. Banking-sector liquidity freeze.',
+      date: '2008-09-15',
+      multiplier: 5.0,
+      pip_jump: 850,
+      asset_class: 'EUR/GBP/USD',
+    },
+  ];
+}
+
+export function getDemoStressTestResults(): StressTestResult[] {
+  const baseScenarios = getDemoStressScenarios();
+  return baseScenarios.map((s, idx) => {
+    // Pre-baked survival outcomes — SNB is the only one that breaks the demo
+    const survival: 'PASS' | 'FAIL' = s.id === 'SNB_UNPEG_2015' ? 'FAIL' : 'PASS';
+    const stressedDD = survival === 'FAIL' ? 14.8 + idx * 0.4 : 4.8 + idx * 1.2;
+    const balanceAfter = survival === 'FAIL' ? 8420 : 10000 - idx * 220;
+    return {
+      id: `stress-${s.id.toLowerCase()}`,
+      scenario: s.id,
+      scenario_name: s.name,
+      multiplier: s.multiplier,
+      survival,
+      original_max_dd_pct: parseFloat((2.1 + idx * 0.3).toFixed(2)),
+      stressed_max_dd_pct: parseFloat(stressedDD.toFixed(2)),
+      original_final_balance: 10000 + 480 - idx * 100,
+      stressed_final_balance: balanceAfter,
+      balance_after: balanceAfter,
+      worst_pip_move: s.pip_jump,
+      triggered_hard_stop: survival === 'FAIL',
+      triggered_kill_switch: survival === 'FAIL' && s.id === 'SNB_UNPEG_2015',
+      margin_call: false,
+      duration_seconds: 4 + idx * 0.4,
+      computed_at: new Date(Date.now() - idx * 60_000).toISOString(),
+    };
+  });
+}
+
+// --- VaR / CVaR demo -------------------------------------------------------- //
+
+export function getDemoRiskMetrics(
+  confidence: number,
+  days: number,
+  method?: VaRMethod,
+): RiskMetrics {
+  // Reasonable demo numbers for $10k account at 1% risk/trade.
+  // VaR values are negative (loss side).
+  const c = confidence >= 0.99 ? 1.0 : 0.95;
+  const baseLoss = 0.012 * (days / 30) * (c >= 1 ? 1.4 : 1.0);
+  return {
+    var_95: parseFloat((-baseLoss * 10000).toFixed(2)),
+    var_99: parseFloat((-baseLoss * 1.4 * 10000).toFixed(2)),
+    cvar_95: parseFloat((-baseLoss * 1.18 * 10000).toFixed(2)),
+    cvar_99: parseFloat((-baseLoss * 1.55 * 10000).toFixed(2)),
+    method: method ?? 'historical',
+    period_days: days,
+    confidence,
+    sample_size: Math.max(60, days * 4),
+    currency: 'USD',
+    computed_at: new Date().toISOString(),
+  };
+}
+
+// --- Monte Carlo demo ------------------------------------------------------- //
+
+export function getDemoMonteCarlo(req: MonteCarloRequest): MonteCarloResult {
+  const iters = req.iterations || 500;
+  const initial = req.initial_balance ?? 10000;
+  // Build distribution: 12 buckets between -50% and +200% of initial
+  const buckets: Array<{ bucket: string; count: number; lower: number; upper: number }> = [];
+  const min = initial * 0.5;
+  const max = initial * 3;
+  const nBuckets = 12;
+  const bw = (max - min) / nBuckets;
+  // Approximate log-normal-ish distribution centred around +50% gain
+  for (let i = 0; i < nBuckets; i++) {
+    const lower = min + i * bw;
+    const upper = lower + bw;
+    // weight: peaked around bucket 5-6 (≈ +50% to +75% gain)
+    const w = Math.exp(-Math.pow(i - 5.5, 2) / 6);
+    const count = Math.max(1, Math.round((w / 6) * iters));
+    buckets.push({
+      bucket: `${(lower / 1000).toFixed(1)}k–${(upper / 1000).toFixed(1)}k`,
+      count,
+      lower: parseFloat(lower.toFixed(0)),
+      upper: parseFloat(upper.toFixed(0)),
+    });
+  }
+  const blowUps = Math.max(1, Math.round(iters * 0.04));
+  const survival = ((iters - blowUps) / iters) * 100;
+
+  // Fan chart: 30 steps with median drifting up and widening band
+  const fan: MonteCarloResult['fan'] = [];
+  for (let step = 0; step <= 30; step++) {
+    const t = step / 30;
+    const median = initial * (1 + 0.55 * t);
+    const spread = initial * 0.05 * Math.sqrt(t + 0.001);
+    fan.push({
+      step,
+      median: parseFloat(median.toFixed(2)),
+      p5: parseFloat((median - 1.65 * spread).toFixed(2)),
+      p95: parseFloat((median + 1.65 * spread).toFixed(2)),
+    });
+  }
+
+  return {
+    id: `mc_${Math.random().toString(36).slice(2, 10)}`,
+    iterations: iters,
+    survival_rate_pct: parseFloat(survival.toFixed(2)),
+    median_final_balance: parseFloat((initial * 1.52).toFixed(2)),
+    p5_final_balance: parseFloat((initial * 0.78).toFixed(2)),
+    p95_final_balance: parseFloat((initial * 2.34).toFixed(2)),
+    median_max_dd_pct: 5.8,
+    p95_max_dd_pct: 11.4,
+    mean_final_balance: parseFloat((initial * 1.48).toFixed(2)),
+    worst_final_balance: parseFloat((initial * 0.42).toFixed(2)),
+    best_final_balance: parseFloat((initial * 3.12).toFixed(2)),
+    blow_ups: blowUps,
+    distribution: buckets,
+    fan,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+// --- Walk-forward demo ------------------------------------------------------ //
+
+export function getDemoWalkForward(_req: WalkForwardRequest): WalkForwardResult {
+  const start = new Date(Date.now() - 365 * 86400_000);
+  const windows: WalkForwardResult['windows'] = [];
+  for (let i = 0; i < 6; i++) {
+    const inStart = new Date(start.getTime() + i * 30 * 86400_000);
+    const inEnd = new Date(inStart.getTime() + 60 * 86400_000);
+    const outStart = inEnd;
+    const outEnd = new Date(outStart.getTime() + 30 * 86400_000);
+    const inPf = 1.45 + Math.sin(i) * 0.2 + i * 0.03;
+    const outPf = inPf * (0.78 + Math.random() * 0.1);
+    const deg = ((inPf - outPf) / inPf) * 100;
+    windows.push({
+      window_index: i + 1,
+      in_sample_start: inStart.toISOString().split('T')[0],
+      in_sample_end: inEnd.toISOString().split('T')[0],
+      out_sample_start: outStart.toISOString().split('T')[0],
+      out_sample_end: outEnd.toISOString().split('T')[0],
+      in_sample_pf: parseFloat(inPf.toFixed(2)),
+      out_sample_pf: parseFloat(outPf.toFixed(2)),
+      degradation_pct: parseFloat(deg.toFixed(1)),
+      in_sample_trades: 60 + i * 4,
+      out_sample_trades: 28 + i * 2,
+      robust: deg < 20,
+    });
+  }
+  const avgDeg = windows.reduce((a, b) => a + b.degradation_pct, 0) / windows.length;
+  const robust = windows.filter((w) => w.robust).length;
+  return {
+    id: `wf_${Math.random().toString(36).slice(2, 10)}`,
+    windows,
+    avg_degradation_pct: parseFloat(avgDeg.toFixed(1)),
+    stable: avgDeg < 20,
+    verdict:
+      avgDeg < 20
+        ? 'Parameters stable — strategy generalises across periods.'
+        : 'Parameters unstable — re-fit needed before live deployment.',
+    total_windows: windows.length,
+    robust_windows: robust,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+// --- Kelly demo ------------------------------------------------------------- //
+
+export function getDemoKelly(): KellyStats {
+  const winRate = 0.47;
+  const avgWin = 25;
+  const avgLoss = 18;
+  // f = W - (1-W)/(avgWin/avgLoss)
+  const ratio = avgWin / avgLoss;
+  const fKelly = winRate - (1 - winRate) / ratio;
+  return {
+    win_rate: winRate,
+    avg_win: avgWin,
+    avg_loss: avgLoss,
+    f_kelly: parseFloat(fKelly.toFixed(4)),
+    f_quarter_kelly: parseFloat((fKelly * 0.25).toFixed(4)),
+    current_risk_pct: 0.01,
+    recommended_risk_pct: parseFloat((Math.max(0.005, Math.min(0.02, fKelly * 0.25 * 0.1))).toFixed(4)),
+    sample_trades: 47,
+    use_kelly: false,
+    note: 'Quarter-Kelly is conservative. Full Kelly is theoretically optimal but maximises drawdown variance.',
+  };
+}
+
+// --- Slippage demo ---------------------------------------------------------- //
+
+export function getDemoSlippageStats(days: number): SlippageStats {
+  const bySymbol = [
+    { symbol: 'EURUSD', fills: 412, avg_pips: 0.6, p95_pips: 1.8 },
+    { symbol: 'GBPUSD', fills: 248, avg_pips: 0.9, p95_pips: 2.6 },
+    { symbol: 'USDJPY', fills: 196, avg_pips: 0.7, p95_pips: 2.1 },
+  ];
+  const timeSeries: SlippageStats['time_series'] = [];
+  const stepMs = (days * 86400_000) / 24;
+  for (let i = 0; i < 24; i++) {
+    const ts = new Date(Date.now() - (24 - i) * stepMs).toISOString();
+    const base = 0.7 + Math.sin(i / 3) * 0.2;
+    timeSeries.push({
+      timestamp: ts,
+      avg_pips: parseFloat(base.toFixed(2)),
+      p95_pips: parseFloat((base * 2.2).toFixed(2)),
+    });
+  }
+  const p95 = 2.4;
+  return {
+    total_fills: bySymbol.reduce((a, b) => a + b.fills, 0),
+    avg_slippage_pips: 0.72,
+    p50_pips: 0.55,
+    p95_pips: p95,
+    p99_pips: 3.6,
+    worst_pips: 6.2,
+    by_symbol: bySymbol,
+    time_series: timeSeries,
+    alert: p95 > 3,
+    threshold_pips: 3,
+  };
+}
+
+// --- Latency demo ----------------------------------------------------------- //
+
+export function getDemoLatencyStats(hours: number): LatencyStats {
+  const byEndpoint = [
+    { endpoint: 'GET /api/status', requests: 1840, avg_ms: 42, p95_ms: 110 },
+    { endpoint: 'GET /api/positions', requests: 920, avg_ms: 68, p95_ms: 142 },
+    { endpoint: 'POST /api/bot/start', requests: 18, avg_ms: 215, p95_ms: 410 },
+    { endpoint: 'GET /api/chart/EURUSD', requests: 412, avg_ms: 88, p95_ms: 180 },
+    { endpoint: 'POST /api/ai/chat', requests: 64, avg_ms: 1850, p95_ms: 3200 },
+  ];
+  const timeSeries: LatencyStats['time_series'] = [];
+  const stepMs = (hours * 3600_000) / 24;
+  for (let i = 0; i < 24; i++) {
+    const ts = new Date(Date.now() - (24 - i) * stepMs).toISOString();
+    const base = 75 + Math.sin(i / 4) * 18 + (i > 18 ? 35 : 0);
+    timeSeries.push({
+      timestamp: ts,
+      avg_ms: Math.round(base),
+      p95_ms: Math.round(base * 1.8),
+    });
+  }
+  const p99 = 420;
+  return {
+    total_requests: byEndpoint.reduce((a, b) => a + b.requests, 0),
+    avg_ms: 92,
+    p50_ms: 58,
+    p95_ms: 240,
+    p99_ms: p99,
+    worst_ms: 1820,
+    by_endpoint: byEndpoint,
+    time_series: timeSeries,
+    alert: p99 > 100,
+    threshold_ms: 100,
+  };
+}
+
+// --- Trade reconstruction demo ---------------------------------------------- //
+
+export function getDemoTradeReconstruction(ticket: number): TradeReconstruction {
+  const baseTime = Date.now() - 90 * 60_000;
+  const entryPrice = 1.0853;
+  const slInit = 1.0838;
+  const slBe = 1.0853;
+  const slTrail1 = 1.0868;
+  const slTrail2 = 1.0878;
+  const tp1Price = 1.0883;
+  const tp2Price = 1.0913;
+  const exitPrice = 1.0908;
+  const events: TradeReconstruction['events'] = [
+    { timestamp: new Date(baseTime).toISOString(), type: 'ENTRY', price: entryPrice, volume: 0.1, reason: 'EMA9/EMA21 cross + VWAP confirmation + ADX 28.4' },
+    { timestamp: new Date(baseTime + 4 * 60_000).toISOString(), type: 'SL_MOVE', price: entryPrice, sl_old: slInit, sl_new: slInit, reason: 'Initial SL at 1.5×ATR + 2 pip buffer' },
+    { timestamp: new Date(baseTime + 22 * 60_000).toISOString(), type: 'TP1_HIT', price: tp1Price, volume: 0.05, reason: 'TP1 (20 pip) hit — partial close 50%' },
+    { timestamp: new Date(baseTime + 22 * 60_000 + 5_000).toISOString(), type: 'BE_MOVE', price: tp1Price, sl_old: slInit, sl_new: slBe, reason: 'SL moved to break-even after TP1' },
+    { timestamp: new Date(baseTime + 38 * 60_000).toISOString(), type: 'TRAILING', price: 1.0889, sl_old: slBe, sl_new: slTrail1, reason: 'Trail 2×ATR behind swing low' },
+    { timestamp: new Date(baseTime + 64 * 60_000).toISOString(), type: 'TRAILING', price: 1.0899, sl_old: slTrail1, sl_new: slTrail2, reason: 'Trail updated on continuation' },
+    { timestamp: new Date(baseTime + 88 * 60_000).toISOString(), type: 'EXIT', price: exitPrice, volume: 0.05, reason: 'Trailing SL hit at 1.0878 (TP2 missed by 4 pips)' },
+  ];
+  return {
+    ticket,
+    symbol: 'EURUSD',
+    direction: 'BUY',
+    entry_time: new Date(baseTime).toISOString(),
+    entry_price: entryPrice,
+    initial_volume: 0.1,
+    exit_time: new Date(baseTime + 88 * 60_000).toISOString(),
+    exit_price: exitPrice,
+    close_reason: 'TRAILING',
+    events,
+    final_pnl: 31.40,
+    r_multiple: 2.09,
+  };
+}
+
+// --- Health & readiness demo ------------------------------------------------ //
+
+export function getDemoReadiness(): ReadinessResponse {
+  return {
+    status: 'healthy',
+    checks: [
+      { name: 'MT5 Connection', status: 'healthy', latency_ms: 142, message: 'connected as 50384721' },
+      { name: 'SQLite Database', status: 'healthy', latency_ms: 3, message: '1247 audit rows' },
+      { name: 'Ollama AI', status: 'healthy', latency_ms: 38, message: 'llama3.2:latest' },
+      { name: 'Tiingo Calendar', status: 'healthy', latency_ms: 215, message: '8 HIGH events cached' },
+      { name: 'Disk Space', status: 'healthy', message: '62% free' },
+      { name: 'Memory', status: 'healthy', message: '412 MB / 2 GB' },
+    ],
+    checked_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoHealthz(): HealthzResponse {
+  return {
+    status: 'healthy',
+    uptime_seconds: 142_873,
+    version: '2.0.0',
+  };
+}

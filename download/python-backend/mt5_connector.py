@@ -414,6 +414,10 @@ class MT5Connector:
                     deviation: int | None = None) -> dict[str, Any]:
         """Place a market order (buy/sell) with SL & TP.
 
+        Sprint 7 #17: records execution latency (ms) and actual slippage
+        (pips) in the returned dict so callers can persist them on the Trade
+        row.
+
         Parameters
         ----------
         symbol : str
@@ -434,18 +438,29 @@ class MT5Connector:
         Returns
         -------
         dict
-            ``{"ok": bool, "ticket": int, "retcode": int, "comment": str}``
+            ``{"ok": bool, "ticket": int, "retcode": int, "comment": str,
+            "execution_latency_ms": float, "slippage_actual_pips": float,
+            "requested_price": float, "fill_price": float|None}``
         """
         self._check()
         if direction.lower() not in ("buy", "sell"):
             raise ValueError("direction must be 'buy' or 'sell'")
         self.ensure_symbol_visible(symbol)
 
+        # Sprint 7 #17: capture requested price + start time for latency
+        tick = mt5.symbol_info_tick(symbol)  # type: ignore[union-attr]
+        requested_price = (tick.ask if direction.lower() == "buy"
+                           else tick.bid) if tick else 0.0
+        t0 = time.perf_counter()
+
         base_dev = (int(deviation) if deviation is not None
                     else int(cfg.MAX_SLIPPAGE_POINTS_ENTRY))
         retries = max(1, int(cfg.SLIPPAGE_RETRY_ATTEMPTS))
         last_result: dict[str, Any] = {
             "ok": False, "ticket": 0, "retcode": -1, "comment": "no_attempt",
+            "requested_price": float(requested_price),
+            "execution_latency_ms": 0.0,
+            "slippage_actual_pips": 0.0,
         }
         for attempt in range(1, retries + 1):
             dev = int(round(base_dev * (1.5 ** (attempt - 1))))
@@ -453,8 +468,28 @@ class MT5Connector:
                 symbol=symbol, direction=direction, volume=volume,
                 sl=sl, tp=tp, comment=comment, deviation=dev,
             )
+            # Annotate with latency + slippage (Sprint 7 #17)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            result["execution_latency_ms"] = round(elapsed_ms, 2)
+            result["requested_price"] = float(requested_price)
+            result["slippage_actual_pips"] = self._compute_slippage_pips(
+                symbol=symbol,
+                direction=direction,
+                requested_price=float(requested_price),
+                fill_price=result.get("fill_price"),
+                ok=bool(result.get("ok")),
+            )
             last_result = result
             if result.get("ok"):
+                # Persist a latency sample for monitoring (best-effort).
+                try:
+                    from database import insert_latency_sample
+                    insert_latency_sample(
+                        endpoint=f"place_order:{symbol}",
+                        latency_ms=elapsed_ms,
+                    )
+                except Exception:  # pragma: no cover
+                    pass
                 return result
             # MT5 retcode 10004 / 10016 / 10021 -> requote / invalid prices /
             # slippage exceeded.  Retry with larger deviation.
@@ -476,11 +511,15 @@ class MT5Connector:
                            tp: float,
                            comment: str,
                            deviation: int) -> dict[str, Any]:
-        """Single attempt at sending a market order via ``order_send``."""
+        """Single attempt at sending a market order via ``order_send``.
+
+        Sprint 7 #17: also returns ``fill_price`` so the caller can compute
+        the actual slippage vs the requested price.
+        """
         tick = mt5.symbol_info_tick(symbol)  # type: ignore[union-attr]
         if tick is None:
             return {"ok": False, "ticket": 0, "retcode": -1,
-                    "comment": "no tick"}
+                    "comment": "no tick", "fill_price": None}
         price = tick.ask if direction.lower() == "buy" else tick.bid
         order_type = mt5.ORDER_TYPE_BUY if direction.lower() == "buy" \
             else mt5.ORDER_TYPE_SELL  # type: ignore[union-attr]
@@ -502,14 +541,44 @@ class MT5Connector:
         result = mt5.order_send(request)  # type: ignore[union-attr]
         if result is None:
             return {"ok": False, "ticket": 0, "retcode": -1,
-                    "comment": "order_send returned None"}
+                    "comment": "order_send returned None",
+                    "fill_price": None}
         ok = result.retcode == mt5.TRADE_RETCODE_DONE  # type: ignore[union-attr]
+        # result.price is the actual fill price (0 if not filled)
+        fill_price = getattr(result, "price", 0.0) or None
         return {
             "ok": bool(ok),
             "ticket": int(result.order),
             "retcode": int(result.retcode),
             "comment": str(result.comment),
+            "fill_price": float(fill_price) if fill_price else None,
         }
+
+    def _compute_slippage_pips(self, *,
+                               symbol: str,
+                               direction: str,
+                               requested_price: float,
+                               fill_price: float | None,
+                               ok: bool) -> float:
+        """Compute the actual slippage in pips between the requested and
+        filled price.
+
+        Positive value = price moved against us (worse than requested).
+        Negative value = price moved in our favour (better).
+        Returns 0.0 if the order wasn't filled or the symbol info is missing.
+        """
+        if not ok or not fill_price or requested_price <= 0:
+            return 0.0
+        try:
+            info = self.get_symbol_info(symbol)
+            pip_size = float(info.pip_size) if info else 0.0001
+        except Exception:
+            pip_size = 0.0001
+        diff = fill_price - requested_price
+        # For buys, positive diff = slippage against us
+        # For sells, negative diff = slippage against us (we sold lower)
+        signed = diff if direction.lower() == "buy" else -diff
+        return round(signed / pip_size, 4) if pip_size > 0 else 0.0
 
     def modify_position(self, ticket: int,
                         sl: float | None = None,

@@ -9,6 +9,9 @@ import {
   ChevronRight,
   Filter,
   Loader2,
+  ShieldCheck,
+  ShieldAlert,
+  Hash,
 } from 'lucide-react';
 import { PanelCard } from '../shared';
 import { Badge } from '@/components/ui/badge';
@@ -28,13 +31,16 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { getAuditLog } from '@/lib/api';
+import {
+  getAuditLog,
+  verifyAuditChain,
+  triggerDownload,
+} from '@/lib/api';
 import { useAppStore } from '@/lib/store';
-import { triggerDownload } from '@/lib/api';
 import { toast } from '@/hooks/use-toast';
 import { AUDIT_EVENT_TYPES, AUDIT_SEVERITIES, type AuditColorToken } from '@/lib/constants';
 import { cn } from '@/lib/utils';
-import type { AuditLogEntry } from '@/lib/types';
+import type { AuditLogEntry, AuditChainVerifyResponse } from '@/lib/types';
 
 const COLOR_CLASS: Record<AuditColorToken, string> = {
   info: 'text-info border-info',
@@ -86,6 +92,12 @@ function AuditRow({ entry, idx }: { entry: AuditLogEntry; idx: number }) {
   const { date, time } = formatTimestamp(entry.timestamp);
   const evColor = findEventColor(entry.event_type);
   const sevColor = findSeverityColor(entry.severity);
+  // Derive a short hash preview (first 8 chars of detail_json) to surface the
+  // integrity-checkpoint column. Falls back to entry.id hex when no detail.
+  const hashPreview = useMemo(() => {
+    const src = entry.detail_json ?? String(entry.id);
+    return src.slice(0, 8);
+  }, [entry.detail_json, entry.id]);
 
   return (
     <>
@@ -110,6 +122,21 @@ function AuditRow({ entry, idx }: { entry: AuditLogEntry; idx: number }) {
         <td className="px-2 text-[10px] text-muted-foreground max-w-[280px] truncate">
           {detailStr || <span className="opacity-50">— no detail —</span>}
         </td>
+        <td className="px-2 text-right text-[10px] font-mono tabular-nums text-muted-foreground">
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-help inline-flex items-center gap-0.5">
+                  <Hash className="h-2.5 w-2.5" />
+                  {hashPreview}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs font-mono">
+                Chain hash preview (first 8 chars of detail_json)
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </td>
         <td className="px-2 text-right">
           {detailStr ? (
             expanded ? <ChevronDown className="h-3 w-3 inline" /> : <ChevronRight className="h-3 w-3 inline" />
@@ -118,7 +145,7 @@ function AuditRow({ entry, idx }: { entry: AuditLogEntry; idx: number }) {
       </tr>
       {expanded && detailStr && (
         <tr className="bg-muted/20">
-          <td colSpan={8} className="px-4 py-2">
+          <td colSpan={9} className="px-4 py-2">
             <pre className="text-[10px] font-mono whitespace-pre-wrap break-all">
               {JSON.stringify(detail, null, 2)}
             </pre>
@@ -136,6 +163,8 @@ export function AuditLogView() {
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [chainVerify, setChainVerify] = useState<AuditChainVerifyResponse | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const auditLogRefresh = useAppStore((s) => s.auditLogRefresh);
 
   const fetchEntries = useCallback(async () => {
@@ -202,6 +231,31 @@ export function AuditLogView() {
     toast({ title: 'CSV exported', description: `${entries.length} entries` });
   };
 
+  const handleVerifyChain = async () => {
+    setVerifying(true);
+    try {
+      const res = await verifyAuditChain();
+      setChainVerify(res);
+      toast({
+        title: res.valid
+          ? `Chain integrity OK · ${res.verified_rows} rows verified`
+          : `Chain BROKEN at row ${res.broken_at_row}`,
+        description: res.valid
+          ? 'Hash chain from row 1 → N is intact (SHA-256 chained).'
+          : `Expected ${res.expected_hash?.slice(0, 8) ?? '—'}, got ${res.actual_hash?.slice(0, 8) ?? '—'}.`,
+        variant: res.valid ? 'default' : 'destructive',
+      });
+    } catch (e) {
+      toast({
+        title: 'Audit chain verification gagal',
+        description: String(e),
+        variant: 'destructive',
+      });
+    } finally {
+      setVerifying(false);
+    }
+  };
+
   // Stats
   const stats = useMemo(() => {
     const bySev: Record<string, number> = { INFO: 0, WARN: 0, ERROR: 0, CRITICAL: 0 };
@@ -234,6 +288,89 @@ export function AuditLogView() {
         <div className="rounded-md border p-3">
           <div className="text-[10px] text-bear uppercase">Critical</div>
           <div className="text-xl font-bold tabular-nums text-bear">{stats.bySev.CRITICAL}</div>
+        </div>
+      </div>
+
+      {/* Chain integrity verify panel (Sprint 6) */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        <div className="xl:col-span-2">
+          <PanelCard
+            title="Hash Chain Integrity"
+            subtitle="Verify audit_log SHA-256 chain from row 1 → N (tamper detection)"
+            icon={chainVerify?.valid === false ? ShieldAlert : ShieldCheck}
+            actions={
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                onClick={handleVerifyChain}
+                disabled={verifying}
+              >
+                {verifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+                Verify Chain Integrity
+              </Button>
+            }
+          >
+            <div className="pt-3">
+              {chainVerify ? (
+                <div
+                  className={cn(
+                    'rounded-md border p-3 flex items-start gap-3',
+                    chainVerify.valid
+                      ? 'border-bull/40 bg-bull/10'
+                      : 'border-bear/40 bg-bear/10',
+                  )}
+                >
+                  {chainVerify.valid ? (
+                    <ShieldCheck className="h-5 w-5 text-bull shrink-0 mt-0.5" />
+                  ) : (
+                    <ShieldAlert className="h-5 w-5 text-bear shrink-0 mt-0.5" />
+                  )}
+                  <div className="text-xs flex-1">
+                    <div
+                      className={cn(
+                        'font-semibold',
+                        chainVerify.valid ? 'text-bull' : 'text-bear',
+                      )}
+                    >
+                      {chainVerify.valid
+                        ? `✓ Chain VALID — ${chainVerify.verified_rows}/${chainVerify.total_rows} rows verified`
+                        : `✗ Chain BROKEN at row ${chainVerify.broken_at_row} (id ${chainVerify.broken_at_id})`}
+                    </div>
+                    {chainVerify.broken_at_row !== null && (
+                      <div className="text-[10px] text-muted-foreground mt-1 font-mono">
+                        Expected: {chainVerify.expected_hash?.slice(0, 16) ?? '—'}…
+                        <br />
+                        Actual: {chainVerify.actual_hash?.slice(0, 16) ?? '—'}…
+                      </div>
+                    )}
+                    <div className="text-[10px] text-muted-foreground mt-1">
+                      Verified at{' '}
+                      {new Date(chainVerify.verified_at).toLocaleString('id-ID', {
+                        timeZone: 'Asia/Jakarta',
+                      })}{' '}
+                      WIB
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground py-4 text-center">
+                  Klik "Verify Chain Integrity" untuk menguji hash chain audit_log
+                  (Sprint 6 — tamper-evident SHA-256 chaining).
+                </div>
+              )}
+            </div>
+          </PanelCard>
+        </div>
+        <div className="rounded-md border border-info/30 bg-info/5 p-3 text-[11px] flex items-start gap-2">
+          <Hash className="h-4 w-4 text-info shrink-0 mt-0.5" />
+          <div>
+            <strong className="text-info">Tamper-evident log:</strong> Setiap row di{' '}
+            <code>audit_log</code> menyimpan hash SHA-256 dari (prev_hash || row_data).
+            Tambah, edit, atau delete row apapun akan memutus chain — terdeteksi
+            pada verify berikutnya. Klik row di tabel untuk lihat detail + hash preview
+            (8 char pertama).
+          </div>
         </div>
       </div>
 
@@ -334,13 +471,14 @@ export function AuditLogView() {
                   <th className="text-left font-medium w-20">Symbol</th>
                   <th className="text-left font-medium w-24">Ticket</th>
                   <th className="text-left font-medium">Detail</th>
+                  <th className="text-left font-medium w-24">Hash</th>
                   <th className="w-6"></th>
                 </tr>
               </thead>
               <tbody>
                 {entries.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                    <td colSpan={9} className="py-8 text-center text-muted-foreground">
                       Tidak ada audit log entries untuk filter ini.
                     </td>
                   </tr>

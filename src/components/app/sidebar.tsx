@@ -13,25 +13,30 @@ import {
   TrendingUp,
   FlaskConical,
   ScrollText,
+  TrendingDown,
+  BarChart3,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { DEMO_MODE } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import type { AppView } from '@/lib/store';
 
-const NAV_ITEMS = [
+const NAV_ITEMS: ReadonlyArray<{ id: AppView; label: string; icon: typeof LayoutDashboard }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'chart', label: 'Chart & Indikator', icon: CandlestickChart },
   { id: 'signals', label: 'Sinyal V2', icon: Zap },
   { id: 'positions', label: 'Posisi & Trade', icon: Briefcase },
   { id: 'journal', label: 'Trade Journal', icon: BookOpen },
-  { id: 'backtest', label: 'Backtest Engine', icon: FlaskConical },
+  { id: 'backtest', label: 'Backtest · Monte Carlo · WF', icon: FlaskConical },
+  { id: 'stress-test', label: 'Stress Test', icon: TrendingDown },
+  { id: 'analytics', label: 'Slippage · Latency · Kelly', icon: BarChart3 },
   { id: 'audit', label: 'Audit Log', icon: ScrollText },
   { id: 'ai', label: 'AI Analisa', icon: Bot },
   { id: 'news', label: 'Kalender Ekonomi', icon: CalendarClock },
   { id: 'strategy', label: 'Strategi V2 Ref', icon: FileText },
   { id: 'settings', label: 'Settings', icon: SettingsIcon },
-] as const;
+];
 
 export function Sidebar() {
   const activeView = useAppStore((s) => s.activeView);

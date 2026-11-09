@@ -402,26 +402,168 @@ def check_correlation(new_symbol: str,
 # --------------------------------------------------------------------------- #
 
 class PositionSizer:
-    """1% risk position sizer using SL distance and pip value."""
+    """1% risk position sizer using SL distance and pip value.
 
-    def __init__(self, risk_pct: float = cfg.RISK_PCT_PER_TRADE) -> None:
+    Sprint 7 #16: ``mode`` selects the sizing strategy.
+        * ``"fixed"``  - constant ``risk_pct`` (default, matches V2 spec)
+        * ``"kelly"``  - quarter-Kelly fraction based on trade-history stats
+    """
+
+    def __init__(self, risk_pct: float = cfg.RISK_PCT_PER_TRADE,
+                 mode: str | None = None) -> None:
         self.risk_pct = risk_pct
+        # Mode override - explicit ctor arg wins, then env var, then default.
+        import os as _os
+        if mode is None:
+            mode = _os.environ.get("POSITION_SIZING_MODE", "fixed").lower()
+        if mode not in ("fixed", "kelly"):
+            mode = "fixed"
+        self.mode: str = mode
 
     def calculate(self, balance: float, sl_pips: float,
                   pip_value_per_lot: float,
                   volume_step: float = 0.01,
                   volume_min: float = 0.01,
-                  volume_max: float = 100.0) -> float:
-        """Return the lot size that risks ``risk_pct`` of ``balance``."""
+                  volume_max: float = 100.0,
+                  kelly_stats: dict[str, Any] | None = None) -> float:
+        """Return the lot size that risks ``risk_pct`` of ``balance``.
+
+        In ``"kelly"`` mode, ``kelly_stats`` should contain ``f_actual``
+        (the quarter-Kelly fraction) - typically from
+        :meth:`KellySizer.calculate_from_history`.  The fraction is capped at
+        2% (max risk per trade).
+        """
+        if self.mode == "kelly" and kelly_stats:
+            risk_pct = min(0.02, float(kelly_stats.get("f_actual", 0.0)))
+        else:
+            risk_pct = self.risk_pct
         if sl_pips <= 0 or pip_value_per_lot <= 0:
             return volume_min
-        raw = (balance * self.risk_pct) / (sl_pips * pip_value_per_lot)
+        raw = (balance * risk_pct) / (sl_pips * pip_value_per_lot)
         if volume_step > 0:
             import math as _m
             raw = _m.floor(raw / volume_step) * volume_step
         raw = max(raw, volume_min)
         raw = min(raw, volume_max)
         return round(raw, 2)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #16: Kelly Criterion position sizer
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class KellyResult:
+    f_kelly: float          # full Kelly fraction (could be aggressive)
+    f_actual: float         # quarter-Kelly (safety cap)
+    risk_pct: float         # final risk % used (capped at 2%)
+    recommended_lot: float
+    win_rate: float
+    avg_win: float
+    avg_loss: float
+
+
+class KellySizer:
+    """Quarter-Kelly position sizer.
+
+    Kelly formula:  f = W - (1 - W) / R
+    where W = win-rate, R = avg_win / avg_loss.
+
+    In practice we use **quarter-Kelly** (f_actual = f_kelly * 0.25) and cap
+    the resulting risk at 2% per trade (more conservative than full Kelly).
+    """
+
+    KELLY_FRACTION: float = 0.25   # quarter-Kelly
+    MAX_RISK_PCT: float = 0.02     # 2% hard cap
+
+    def __init__(self, kelly_fraction: float = KELLY_FRACTION,
+                 max_risk_pct: float = MAX_RISK_PCT) -> None:
+        self.kelly_fraction = kelly_fraction
+        self.max_risk_pct = max_risk_pct
+
+    def calculate(self, balance: float,
+                  win_rate: float,
+                  avg_win: float,
+                  avg_loss: float,
+                  sl_pips: float = 10.0,
+                  pip_value_per_lot: float = 10.0,
+                  volume_step: float = 0.01,
+                  volume_min: float = 0.01,
+                  volume_max: float = 100.0) -> KellyResult:
+        """Compute Kelly fraction and recommended lot size.
+
+        ``avg_loss`` should be a positive number (absolute value of avg loss).
+        Returns a :class:`KellyResult` with both full + quarter Kelly fractions.
+        """
+        if win_rate <= 0 or win_rate >= 1:
+            # Edge cases - degenerate to no-trade
+            f_kelly = 0.0
+        elif avg_loss <= 0 or avg_win <= 0:
+            f_kelly = 0.0
+        else:
+            R = avg_win / avg_loss
+            f_kelly = win_rate - (1 - win_rate) / R
+        f_actual = max(0.0, f_kelly * self.kelly_fraction)
+        risk_pct = min(self.max_risk_pct, f_actual)
+        # Compute recommended lot
+        if sl_pips > 0 and pip_value_per_lot > 0:
+            raw = (balance * risk_pct) / (sl_pips * pip_value_per_lot)
+            if volume_step > 0:
+                import math as _m
+                raw = _m.floor(raw / volume_step) * volume_step
+            raw = max(raw, volume_min)
+            raw = min(raw, volume_max)
+            recommended_lot = round(raw, 2)
+        else:
+            recommended_lot = volume_min
+        return KellyResult(
+            f_kelly=round(f_kelly, 4),
+            f_actual=round(f_actual, 4),
+            risk_pct=round(risk_pct, 4),
+            recommended_lot=recommended_lot,
+            win_rate=round(win_rate, 4),
+            avg_win=round(avg_win, 4),
+            avg_loss=round(avg_loss, 4),
+        )
+
+    def calculate_from_history(self, trades: list[dict[str, Any]],
+                               balance: float,
+                               sl_pips: float = 10.0,
+                               pip_value_per_lot: float = 10.0,
+                               volume_step: float = 0.01,
+                               volume_min: float = 0.01,
+                               volume_max: float = 100.0
+                               ) -> KellyResult:
+        """Auto-compute Kelly stats from a trade-history list.
+
+        Each trade dict should have a ``profit`` (or ``pnl``) float field.
+        """
+        if not trades:
+            return self.calculate(balance, 0.0, 0.0, 0.0,
+                                  sl_pips, pip_value_per_lot,
+                                  volume_step, volume_min, volume_max)
+        wins: list[float] = []
+        losses: list[float] = []
+        for t in trades:
+            try:
+                p = float(t.get("profit") or t.get("pnl") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if p > 0:
+                wins.append(p)
+            elif p < 0:
+                losses.append(abs(p))
+        total = len(wins) + len(losses)
+        if total == 0:
+            return self.calculate(balance, 0.0, 0.0, 0.0,
+                                  sl_pips, pip_value_per_lot,
+                                  volume_step, volume_min, volume_max)
+        win_rate = len(wins) / total
+        avg_win = (sum(wins) / len(wins)) if wins else 0.0
+        avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+        return self.calculate(balance, win_rate, avg_win, avg_loss,
+                              sl_pips, pip_value_per_lot,
+                              volume_step, volume_min, volume_max)
 
 
 # --------------------------------------------------------------------------- #
@@ -564,6 +706,7 @@ def evaluate_risk_gate(current_positions: int,
 __all__ = [
     "TieredStop", "TieredStopResult", "DailyRiskTracker", "DailyRiskState",
     "PositionSizer", "RiskGate",
+    "KellySizer", "KellyResult",
     "enforce_max_positions", "enforce_max_daily_trades",
     "check_kill_switch", "lock_bot", "unlock_bot",
     "engage_kill_switch", "release_kill_switch",

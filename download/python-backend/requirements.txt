@@ -3,6 +3,8 @@
 #
 # NOTE: MetaTrader5 is Windows-only.  On Linux/macOS pip will fail to install
 # it - run this requirements file on the Windows 11 host where MT5 is installed.
+# For non-MT5 features (paper mode, backtest, analytics, Docker), MT5 is not
+# required - the backend degrades gracefully.
 
 # Web framework
 fastapi==0.115.5
@@ -21,6 +23,24 @@ pydantic==2.9.2
 
 # Database
 sqlalchemy==2.0.36
+# Sprint 5 #2: at-rest encryption (optional - falls back to plaintext SQLite)
+sqlcipher3-binary==0.5.1.post1
+
+# Sprint 5 #3: secret management (Fernet)
+cryptography==43.0.3
+
+# Sprint 5 #4: rate limiting
+slowapi==0.1.10
+
+# Sprint 5 #6: bcrypt password hashing
+bcrypt==4.2.0
+
+# Sprint 7 #13: scipy for VaR / parametric stats
+scipy==1.14.1
+
+# Sprint 8 #20: Prometheus metrics + structured JSON logs
+prometheus-client==0.21.1
+python-json-logger==3.2.1
 
 # Math / data
 numpy==2.1.3
@@ -41,3 +61,9 @@ reportlab==4.2.5
 
 # NTP time-sync drift check
 ntplib==0.4.0
+
+# ---- Sprint 8 #20: testing + security scanning ---- #
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+bandit==1.8.0

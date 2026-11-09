@@ -655,6 +655,17 @@ class TradingEngine:
             logger.info("[PAPER] trade_id=%s ticket=%s %s %s %.2f lot @ %s",
                         trade_id, fake_ticket,
                         sig.symbol, sig.direction, sig.lot_size, sig.entry_price)
+            # Sprint 6 #12: persist ENTRY trade event
+            try:
+                db.insert_trade_event(
+                    trade_id=trade_id, event_type="ENTRY",
+                    ticket=fake_ticket, price=sig.entry_price,
+                    volume=sig.lot_size, sl=sig.sl_price, tp=sig.tp1_price,
+                    detail={"paper": True, "regime": sig.regime,
+                            "session": sig.session},
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("insert_trade_event ENTRY failed: %s", exc)
             await self.bus.publish({
                 "type": "order_placed",
                 "symbol": sig.symbol,
@@ -713,10 +724,27 @@ class TradingEngine:
                 original_volume=sig.lot_size,
                 remaining_volume=sig.lot_size,
                 strategy_version="v2.0",
+                # Sprint 7 #17: persist slippage + execution latency
+                slippage_actual=order.get("slippage_actual_pips"),
+                execution_latency_ms=order.get("execution_latency_ms"),
             )
             logger.info("Order placed: %s %s %.2f lot ticket=%s trade_id=%s",
                         sig.symbol, sig.direction, sig.lot_size,
                         order.get("ticket"), trade_id)
+            # Sprint 6 #12: persist ENTRY trade event
+            try:
+                db.insert_trade_event(
+                    trade_id=trade_id, event_type="ENTRY",
+                    ticket=order.get("ticket"), price=sig.entry_price,
+                    volume=sig.lot_size, sl=sig.sl_price, tp=sig.tp1_price,
+                    detail={
+                        "regime": sig.regime, "session": sig.session,
+                        "slippage_pips": order.get("slippage_actual_pips"),
+                        "latency_ms": order.get("execution_latency_ms"),
+                    },
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("insert_trade_event ENTRY failed: %s", exc)
         else:
             logger.warning("Order failed for %s: %s", sig.symbol, order)
 
@@ -787,6 +815,21 @@ class TradingEngine:
             await self._partial_close(pos, partial_vol, reason="tp1")
             # Mark DB stage
             self._mark_trade_stage(pos.ticket, "TP1_HIT", tp1_hit=True)
+            # Sprint 6 #12: persist trade events for TP1 + SL_MOVE + PARTIAL_CLOSE
+            await self._persist_trade_events(pos, [
+                {"event_type": "TP1_HIT", "price": current_price,
+                 "volume": pos.volume, "sl": new_sl, "tp": pos.tp,
+                 "detail": {"moved_pips": moved_pips,
+                            "tp1_distance_pips": tp1_distance}},
+                {"event_type": "SL_MOVE", "price": current_price,
+                 "volume": pos.volume, "sl": new_sl, "tp": pos.tp,
+                 "detail": {"reason": "to_be_plus_buffer",
+                            "be_buffer_pips": cfg.BE_BUFFER_PIPS}},
+                {"event_type": "PARTIAL_CLOSE", "price": current_price,
+                 "volume": partial_vol, "sl": new_sl, "tp": pos.tp,
+                 "detail": {"pct": cfg.TP1_CLOSE_PCT,
+                            "reason": "tp1"}},
+            ])
             await self.bus.publish({
                 "type": "tp1_hit",
                 "ticket": pos.ticket,
@@ -802,6 +845,19 @@ class TradingEngine:
             await self._partial_close(pos, partial_vol, reason="tp2")
             self._mark_trade_stage(pos.ticket, "TP2_HIT", tp2_hit=True,
                                    trailing_active=True)
+            # Sprint 6 #12: persist TP2_HIT + PARTIAL_CLOSE + TRAILING_UPDATE
+            await self._persist_trade_events(pos, [
+                {"event_type": "TP2_HIT", "price": current_price,
+                 "volume": pos.volume, "sl": pos.sl, "tp": pos.tp,
+                 "detail": {"moved_pips": moved_pips,
+                            "tp2_distance_pips": tp2_distance}},
+                {"event_type": "PARTIAL_CLOSE", "price": current_price,
+                 "volume": partial_vol, "sl": pos.sl, "tp": pos.tp,
+                 "detail": {"pct": cfg.TP2_CLOSE_PCT, "reason": "tp2"}},
+                {"event_type": "TRAILING_UPDATE", "price": current_price,
+                 "volume": pos.volume, "sl": pos.sl, "tp": pos.tp,
+                 "detail": {"started": True}},
+            ])
             await self.bus.publish({
                 "type": "tp2_hit",
                 "ticket": pos.ticket,
@@ -815,6 +871,20 @@ class TradingEngine:
         # ---- Trailing 2x ATR for remaining 20% ----
         elif moved_pips >= tp2_distance and self._tp2_done(pos):
             await self._trail_position(pos, sym_info, is_buy, entry, pip_size)
+            # Sprint 6 #12: persist TRAILING_UPDATE (only every few ticks via
+            # a slug to avoid spamming the table - logged at DEBUG)
+            try:
+                row = db.get_trade_by_ticket(pos.ticket)
+                if row:
+                    db.insert_trade_event(
+                        trade_id=int(row["id"]),
+                        event_type="TRAILING_UPDATE",
+                        ticket=pos.ticket, price=current_price,
+                        volume=pos.volume, sl=pos.sl, tp=pos.tp,
+                        detail={"moved_pips": moved_pips},
+                    )
+            except Exception:  # pragma: no cover
+                pass
 
     def _tp1_done(self, pos: Any) -> bool:
         """Return True if TP1 has already been hit for this position.
@@ -875,6 +945,36 @@ class TradingEngine:
             db.update_trade(int(row["id"]), **fields)
         except Exception as exc:  # pragma: no cover
             logger.warning("_mark_trade_stage(%s) failed: %s", ticket, exc)
+
+    async def _persist_trade_events(self, pos: Any,
+                                    events: list[dict[str, Any]]) -> None:
+        """Persist a list of trade-event dicts for ``pos`` (Sprint 6 #12).
+
+        Each event dict has the keys: ``event_type``, ``price``, ``volume``,
+        ``sl``, ``tp``, ``detail``.
+        """
+        try:
+            row = db.get_trade_by_ticket(int(pos.ticket))
+            if row is None:
+                return
+            trade_id = int(row["id"])
+        except Exception:  # pragma: no cover
+            return
+        for ev in events:
+            try:
+                db.insert_trade_event(
+                    trade_id=trade_id,
+                    event_type=ev["event_type"],
+                    ticket=int(pos.ticket),
+                    price=ev.get("price"),
+                    volume=ev.get("volume"),
+                    sl=ev.get("sl"),
+                    tp=ev.get("tp"),
+                    detail=ev.get("detail"),
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning("insert_trade_event %s failed: %s",
+                               ev.get("event_type"), exc)
 
     async def _partial_close(self, pos: Any, volume: float, reason: str) -> None:
         """Partial-close via MT5 opposite order (audit-fix Sprint 1 #1).
@@ -961,6 +1061,24 @@ class TradingEngine:
             logger.error("exit_position timeout ticket=%s: %s", ticket, exc)
             result = {"ok": False, "retcode": -1,
                       "comment": f"timeout: {exc}"}
+        # Sprint 6 #12: persist MANUAL_CLOSE or SL_HIT event
+        try:
+            row = db.get_trade_by_ticket(int(ticket))
+            if row:
+                event_type = ("MANUAL_CLOSE" if reason in ("manual", "weekend_close",
+                                                           "db_restore")
+                              else "SL_HIT")
+                db.insert_trade_event(
+                    trade_id=int(row["id"]),
+                    event_type=event_type,
+                    ticket=int(ticket),
+                    price=row.get("close_price") or row.get("open_price"),
+                    volume=row.get("remaining_volume") or row.get("volume"),
+                    sl=row.get("sl"), tp=row.get("tp"),
+                    detail={"reason": reason, "ok": result.get("ok")},
+                )
+        except Exception:  # pragma: no cover
+            pass
         await self.bus.publish({
             "type": "position_closed",
             "ticket": ticket,

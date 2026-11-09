@@ -519,3 +519,340 @@ export interface TickPrice {
   spread: number;
   timestamp: string;
 }
+
+// --------------------------------------------------------------------------- //
+// Sprint 5-8: Auth, security, regulatory, advanced analytics
+// --------------------------------------------------------------------------- //
+
+export interface AuthUser {
+  username: string;
+  role: 'admin' | 'trader' | 'viewer';
+  login_at?: string;
+  ip?: string;
+}
+
+export interface AuthLoginResponse {
+  api_key: string;
+  expires_at: string | null;
+  user: AuthUser;
+}
+
+export interface AuthMeResponse {
+  user: AuthUser;
+  api_key_preview: string;
+  expires_at: string | null;
+}
+
+export interface ApiKeyInfo {
+  id: string;
+  label: string;
+  prefix: string;
+  created_at: string;
+  last_used?: string | null;
+  expires_at?: string | null;
+}
+
+export interface ApiKeyListResponse {
+  keys: ApiKeyInfo[];
+}
+
+export interface CreateApiKeyResponse {
+  id: string;
+  key: string; // Only returned once at creation time
+  label: string;
+  created_at: string;
+}
+
+export interface SecretMetadata {
+  name: string;
+  updated_at: string;
+  set_by?: string;
+}
+
+export interface SecretListResponse {
+  secrets: SecretMetadata[];
+}
+
+// Risk disclosure acknowledgment (full status, beyond text-only)
+export interface RiskDisclosureStatus {
+  acknowledged: boolean;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+  expires_at: string | null;
+  days_remaining: number | null;
+  requires_reack: boolean;
+}
+
+export interface RiskDisclosureAckRequest {
+  version: string;
+  accepted_rules: boolean;
+  accepted_risks: boolean;
+}
+
+export interface RiskDisclosureAckResponse {
+  ok: boolean;
+  acknowledged_at: string;
+  expires_at: string;
+}
+
+// Audit-log chain integrity verification (Sprint 6 — hash chaining)
+export interface AuditChainVerifyResponse {
+  valid: boolean;
+  total_rows: number;
+  verified_rows: number;
+  broken_at_row: number | null;
+  broken_at_id: number | null;
+  expected_hash: string | null;
+  actual_hash: string | null;
+  verified_at: string;
+}
+
+// Regulatory (BAPPEBTI + tax export info)
+export interface BappebtiStatus {
+  registered: boolean;
+  broker_name: string;
+  bappebti_license: string | null;
+  status: 'REGISTERED' | 'PENDING' | 'NOT_REGISTERED' | 'UNKNOWN';
+  last_checked: string;
+  warnings: string[];
+}
+
+// Trade reconstruction (tick-level timeline)
+export type TradeEventType =
+  | 'ENTRY'
+  | 'SL_MOVE'
+  | 'BE_MOVE'
+  | 'TP1_HIT'
+  | 'TP2_HIT'
+  | 'TRAILING'
+  | 'PARTIAL_CLOSE'
+  | 'EXIT'
+  | 'MANUAL_CLOSE';
+
+export interface TradeEvent {
+  timestamp: string;
+  type: TradeEventType;
+  price: number;
+  volume?: number;
+  sl_old?: number | null;
+  sl_new?: number | null;
+  reason?: string;
+  ticket?: number;
+}
+
+export interface TradeReconstruction {
+  ticket: number;
+  symbol: string;
+  direction: TradeDirection;
+  entry_time: string;
+  entry_price: number;
+  initial_volume: number;
+  exit_time: string | null;
+  exit_price: number | null;
+  close_reason: CloseReason | null;
+  events: TradeEvent[];
+  final_pnl: number | null;
+  r_multiple: number | null;
+}
+
+// VaR / CVaR analytics (Sprint 7 — advanced risk analytics)
+export type VaRMethod = 'historical' | 'parametric';
+
+export interface RiskMetrics {
+  var_95: number; // negative number = potential loss
+  var_99: number;
+  cvar_95: number;
+  cvar_99: number;
+  method: VaRMethod;
+  period_days: number;
+  confidence: number; // 0.95 or 0.99
+  sample_size: number;
+  currency: string;
+  computed_at: string;
+}
+
+// Stress test (Sprint 7 — black swan scenario replay)
+export type StressScenarioId =
+  | 'SNB_UNPEG_2015'
+  | 'BREXIT_2016'
+  | 'COVID_CRASH_2020'
+  | 'GFC_2008';
+
+export interface StressScenario {
+  id: StressScenarioId;
+  name: string;
+  description: string;
+  date: string;
+  multiplier: number; // volatility multiplier applied to historical returns
+  pip_jump: number; // typical sudden pip move for the scenario
+  asset_class: string;
+}
+
+export interface StressTestRequest {
+  scenario: StressScenarioId;
+  initial_balance?: number;
+  position_value?: number;
+  pairs?: string[];
+}
+
+export interface StressTestResult {
+  id: string;
+  scenario: StressScenarioId;
+  scenario_name: string;
+  multiplier: number;
+  survival: 'PASS' | 'FAIL';
+  original_max_dd_pct: number;
+  stressed_max_dd_pct: number;
+  original_final_balance: number;
+  stressed_final_balance: number;
+  balance_after: number;
+  worst_pip_move: number;
+  triggered_hard_stop: boolean;
+  triggered_kill_switch: boolean;
+  margin_call: boolean;
+  duration_seconds: number;
+  computed_at: string;
+}
+
+// Monte Carlo simulation (Sprint 7 — backtest robustness)
+export interface MonteCarloRequest {
+  iterations: number; // 100 / 500 / 1000
+  trade_period_days?: number;
+  initial_balance?: number;
+  symbol?: string;
+  seed?: number;
+}
+
+export interface MonteCarloResult {
+  id: string;
+  iterations: number;
+  survival_rate_pct: number; // % of runs that didn't blow up
+  median_final_balance: number;
+  p5_final_balance: number;
+  p95_final_balance: number;
+  median_max_dd_pct: number;
+  p95_max_dd_pct: number;
+  mean_final_balance: number;
+  worst_final_balance: number;
+  best_final_balance: number;
+  blow_ups: number; // runs ending below 50% of initial
+  // Histogram bins (final balance distribution)
+  distribution: Array<{ bucket: string; count: number; lower: number; upper: number }>;
+  // Equity curve fan chart: one median + P5/P95 band per step
+  fan: Array<{
+    step: number;
+    median: number;
+    p5: number;
+    p95: number;
+  }>;
+  computed_at: string;
+}
+
+// Walk-forward analysis (Sprint 7 — parameter stability)
+export interface WalkForwardRequest {
+  symbol?: string;
+  in_sample_window_days?: number; // e.g. 60
+  out_sample_window_days?: number; // e.g. 30
+  initial_balance?: number;
+}
+
+export interface WalkForwardWindow {
+  window_index: number;
+  in_sample_start: string;
+  in_sample_end: string;
+  out_sample_start: string;
+  out_sample_end: string;
+  in_sample_pf: number;
+  out_sample_pf: number;
+  degradation_pct: number;
+  in_sample_trades: number;
+  out_sample_trades: number;
+  robust: boolean;
+}
+
+export interface WalkForwardResult {
+  id: string;
+  windows: WalkForwardWindow[];
+  avg_degradation_pct: number;
+  stable: boolean;
+  verdict: string;
+  total_windows: number;
+  robust_windows: number;
+  computed_at: string;
+}
+
+// Kelly criterion (Sprint 7 — position sizing)
+export interface KellyStats {
+  win_rate: number;
+  avg_win: number;
+  avg_loss: number;
+  f_kelly: number; // full Kelly fraction
+  f_quarter_kelly: number; // quarter Kelly (recommended)
+  current_risk_pct: number;
+  recommended_risk_pct: number;
+  sample_trades: number;
+  use_kelly: boolean;
+  note?: string;
+}
+
+// Slippage analytics (Sprint 7)
+export interface SlippageStats {
+  total_fills: number;
+  avg_slippage_pips: number;
+  p50_pips: number;
+  p95_pips: number;
+  p99_pips: number;
+  worst_pips: number;
+  by_symbol: Array<{ symbol: string; fills: number; avg_pips: number; p95_pips: number }>;
+  time_series: Array<{ timestamp: string; avg_pips: number; p95_pips: number }>;
+  alert: boolean;
+  threshold_pips: number;
+}
+
+// Latency analytics (Sprint 7)
+export interface LatencyStats {
+  total_requests: number;
+  avg_ms: number;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  worst_ms: number;
+  by_endpoint: Array<{ endpoint: string; requests: number; avg_ms: number; p95_ms: number }>;
+  time_series: Array<{ timestamp: string; avg_ms: number; p95_ms: number }>;
+  alert: boolean;
+  threshold_ms: number;
+}
+
+// Health & readiness (Sprint 8 — DevOps)
+export type HealthState = 'healthy' | 'degraded' | 'unhealthy';
+
+export interface HealthCheck {
+  name: string;
+  status: HealthState;
+  latency_ms?: number;
+  message?: string;
+}
+
+export interface ReadinessResponse {
+  status: HealthState;
+  checks: HealthCheck[];
+  checked_at: string;
+}
+
+export interface HealthzResponse {
+  status: HealthState;
+  uptime_seconds: number;
+  version: string;
+}
+
+// Position sizing mode (Settings → Advanced Risk)
+export type PositionSizingMode = 'FIXED_1PCT' | 'KELLY_QUARTER' | 'CUSTOM';
+
+// Encryption status indicator (SQLCipher)
+export interface EncryptionStatus {
+  enabled: boolean;
+  cipher: 'sqlcipher' | 'aes-256' | 'none' | null;
+  kdf_iters?: number;
+  page_size?: number;
+  tested_at: string;
+}

@@ -3,7 +3,22 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { DensityMode } from './constants';
-import type { Settings, BotMode, Signal, Trade, TickPrice } from './types';
+import type { Settings, BotMode, Signal, Trade, TickPrice, AuthUser, PositionSizingMode, VaRMethod } from './types';
+
+export type AppView =
+  | 'dashboard'
+  | 'chart'
+  | 'signals'
+  | 'positions'
+  | 'journal'
+  | 'ai'
+  | 'news'
+  | 'strategy'
+  | 'backtest'
+  | 'audit'
+  | 'settings'
+  | 'stress-test'
+  | 'analytics';
 
 interface AppStore {
   // Display
@@ -11,19 +26,8 @@ interface AppStore {
   setDensity: (d: DensityMode) => void;
 
   // Navigation
-  activeView:
-    | 'dashboard'
-    | 'chart'
-    | 'signals'
-    | 'positions'
-    | 'journal'
-    | 'ai'
-    | 'news'
-    | 'strategy'
-    | 'backtest'
-    | 'audit'
-    | 'settings';
-  setActiveView: (v: AppStore['activeView']) => void;
+  activeView: AppView;
+  setActiveView: (v: AppView) => void;
 
   // Symbol selection
   activeSymbol: string;
@@ -36,6 +40,13 @@ interface AppStore {
   // Kill switch confirmation modal
   killSwitchOpen: boolean;
   setKillSwitchOpen: (open: boolean) => void;
+
+  // --- Auth (NOT persisted to localStorage) --- //
+  authApiKey: string | null;
+  authUser: AuthUser | null;
+  isAuthenticated: boolean;
+  setAuth: (apiKey: string, user: AuthUser) => void;
+  clearAuth: () => void;
 
   // --- New state for audit-fix backend endpoints --- //
 
@@ -89,6 +100,23 @@ interface AppStore {
 
   /** Reset realtime transient state (used when disconnecting). */
   resetRealtime: () => void;
+
+  // --- Advanced risk settings (Sprint 7) --- //
+  /** Position sizing mode: fixed 1%, quarter-Kelly, or custom. */
+  positionSizing: PositionSizingMode;
+  setPositionSizing: (m: PositionSizingMode) => void;
+
+  /** VaR confidence level selector. */
+  varConfidence: 0.95 | 0.99;
+  setVarConfidence: (c: 0.95 | 0.99) => void;
+
+  /** VaR method (historical or parametric). */
+  varMethod: VaRMethod;
+  setVarMethod: (m: VaRMethod) => void;
+
+  /** Whether to use Kelly sizing (drives settings update). */
+  useKelly: boolean;
+  setUseKelly: (v: boolean) => void;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -137,6 +165,15 @@ export const useAppStore = create<AppStore>()(
 
       killSwitchOpen: false,
       setKillSwitchOpen: (open) => set({ killSwitchOpen: open }),
+
+      // --- Auth state (transient, NOT persisted) --- //
+      authApiKey: null,
+      authUser: null,
+      isAuthenticated: false,
+      setAuth: (apiKey, user) =>
+        set({ authApiKey: apiKey, authUser: user, isAuthenticated: true }),
+      clearAuth: () =>
+        set({ authApiKey: null, authUser: null, isAuthenticated: false }),
 
       // --- New realtime state --- //
       botMode: 'PAPER',
@@ -208,6 +245,19 @@ export const useAppStore = create<AppStore>()(
           wsConnected: false,
           wsConnecting: false,
         }),
+
+      // --- Advanced risk settings --- //
+      positionSizing: 'FIXED_1PCT',
+      setPositionSizing: (m) => set({ positionSizing: m }),
+
+      varConfidence: 0.95,
+      setVarConfidence: (c) => set({ varConfidence: c }),
+
+      varMethod: 'historical',
+      setVarMethod: (m) => set({ varMethod: m }),
+
+      useKelly: false,
+      setUseKelly: (v) => set({ useKelly: v }),
     }),
     {
       name: 'forex-scalping-v2-store',
@@ -218,6 +268,10 @@ export const useAppStore = create<AppStore>()(
         botMode: state.botMode,
         dryRun: state.dryRun,
         paperMode: state.paperMode,
+        positionSizing: state.positionSizing,
+        varConfidence: state.varConfidence,
+        varMethod: state.varMethod,
+        useKelly: state.useKelly,
       }),
     }
   )

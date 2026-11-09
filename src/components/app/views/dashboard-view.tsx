@@ -28,11 +28,13 @@ import {
   X,
   Flame,
   Snowflake,
+  Gauge,
+  Loader2,
 } from 'lucide-react';
 import { StatCard, PanelCard, StatusDot } from '../shared';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAppStore } from '@/lib/store';
 import {
@@ -42,6 +44,7 @@ import {
   getNews,
   getEquityCurve,
   getRiskDisclosure,
+  getRiskMetrics,
 } from '@/lib/api';
 import { TRADING_PAIRS, V2_RULES } from '@/lib/constants';
 import { cn } from '@/lib/utils';
@@ -52,6 +55,7 @@ import type {
   NewsEvent,
   BotStatus,
   EquityCurvePoint,
+  RiskMetrics,
 } from '@/lib/types';
 import { BotControl } from '../bot-control';
 
@@ -305,6 +309,219 @@ function StageBadge({ trade }: { trade: Trade }) {
   );
 }
 
+// --------------------------------------------------------------------------- //
+// Sprint 7 — VaR / CVaR risk metrics panel
+// --------------------------------------------------------------------------- //
+
+function RiskMetricsPanel({ balance }: { balance: number }) {
+  const varMethod = useAppStore((s) => s.varMethod);
+  const setVarMethod = useAppStore((s) => s.setVarMethod);
+  const varConfidence = useAppStore((s) => s.varConfidence);
+  const setVarConfidence = useAppStore((s) => s.setVarConfidence);
+  const [period, setPeriod] = useState<number>(30);
+  const [metrics, setMetrics] = useState<RiskMetrics | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    let cancelled = false;
+    // Mark loading asynchronously (after mount) to avoid the
+    // `react-hooks/set-state-in-effect` warning — initial state is already
+    // `loading=true` so the first render is correct; subsequent re-fetches
+    // triggered by parameter changes flip loading inside a microtask.
+    Promise.resolve().then(() => {
+      if (!cancelled) setLoading(true);
+    });
+    getRiskMetrics(varConfidence, period, varMethod)
+      .then((m) => {
+        if (mounted) setMetrics(m);
+      })
+      .catch(() => {
+        // silent
+      })
+      .finally(() => mounted && setLoading(false));
+    return () => {
+      mounted = false;
+      cancelled = true;
+    };
+  }, [varConfidence, period, varMethod]);
+
+  // Hard stop tier = 2% of balance → if VaR 95 exceeds that, flag red.
+  const hardStopThreshold = Math.abs(balance * V2_RULES.TIERED_STOPS.HARD_DAILY);
+  const var95Breaches = metrics ? Math.abs(metrics.var_95) > hardStopThreshold : false;
+  const var99Breaches = metrics ? Math.abs(metrics.var_99) > hardStopThreshold * 1.5 : false;
+
+  return (
+    <PanelCard
+      title="Risk Metrics (VaR / CVaR)"
+      subtitle={`99% confidence × ${period}d horizon · ${varMethod} method`}
+      icon={Gauge}
+      actions={
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setVarMethod('historical')}
+            className={cn(
+              'text-[10px] px-2 py-0.5 rounded-md border',
+              varMethod === 'historical' ? 'border-primary bg-accent' : 'border-border',
+            )}
+          >
+            Historical
+          </button>
+          <button
+            onClick={() => setVarMethod('parametric')}
+            className={cn(
+              'text-[10px] px-2 py-0.5 rounded-md border',
+              varMethod === 'parametric' ? 'border-primary bg-accent' : 'border-border',
+            )}
+          >
+            Parametric
+          </button>
+        </div>
+      }
+    >
+      <div className="pt-3 flex flex-col gap-3">
+        {/* Period + confidence selectors */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">Period:</span>
+            {[30, 60, 90].map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={cn(
+                  'text-[10px] px-2 py-0.5 rounded-md border',
+                  period === p ? 'border-primary bg-accent' : 'border-border',
+                )}
+              >
+                {p}d
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-muted-foreground">Confidence:</span>
+            <button
+              onClick={() => setVarConfidence(0.95)}
+              className={cn(
+                'text-[10px] px-2 py-0.5 rounded-md border',
+                varConfidence === 0.95 ? 'border-primary bg-accent' : 'border-border',
+              )}
+            >
+              95%
+            </button>
+            <button
+              onClick={() => setVarConfidence(0.99)}
+              className={cn(
+                'text-[10px] px-2 py-0.5 rounded-md border',
+                varConfidence === 0.99 ? 'border-primary bg-accent' : 'border-border',
+              )}
+            >
+              99%
+            </button>
+          </div>
+        </div>
+
+        {/* Metric grid */}
+        {loading && !metrics ? (
+          <div className="flex items-center justify-center py-4 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin mr-2" />
+            Computing VaR…
+          </div>
+        ) : metrics ? (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <VarCell
+                label="VaR 95%"
+                value={metrics.var_95}
+                currency={metrics.currency}
+                alert={var95Breaches}
+              />
+              <VarCell
+                label="VaR 99%"
+                value={metrics.var_99}
+                currency={metrics.currency}
+                alert={var99Breaches}
+              />
+              <VarCell
+                label="CVaR 95%"
+                value={metrics.cvar_95}
+                currency={metrics.currency}
+                alert={Math.abs(metrics.cvar_95) > hardStopThreshold}
+              />
+              <VarCell
+                label="CVaR 99%"
+                value={metrics.cvar_99}
+                currency={metrics.currency}
+                alert={Math.abs(metrics.cvar_99) > hardStopThreshold * 1.5}
+              />
+            </div>
+
+            {(var95Breaches || var99Breaches) && (
+              <div className="rounded-md border border-bear/40 bg-bear/10 p-2 text-[11px] flex items-start gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-bear shrink-0 mt-0.5" />
+                <div className="text-bear">
+                  <strong>WARNING:</strong> VaR melebihi hard-stop tier (2% balance ={' '}
+                  ${hardStopThreshold.toFixed(2)}). Kurangi position size atau stop trading
+                  hingga volatility turun.
+                </div>
+              </div>
+            )}
+
+            <div className="text-[10px] text-muted-foreground">
+              Sample size: <strong>{metrics.sample_size}</strong> returns · computed{' '}
+              {new Date(metrics.computed_at).toLocaleTimeString('id-ID', {
+                hour: '2-digit',
+                minute: '2-digit',
+                timeZone: 'Asia/Jakarta',
+              })}{' '}
+              WIB · Hard-stop reference: -${hardStopThreshold.toFixed(2)} (-2%)
+            </div>
+          </>
+        ) : (
+          <div className="text-xs text-muted-foreground py-4 text-center">
+            VaR data unavailable.
+          </div>
+        )}
+      </div>
+    </PanelCard>
+  );
+}
+
+function VarCell({
+  label,
+  value,
+  currency,
+  alert,
+}: {
+  label: string;
+  value: number;
+  currency: string;
+  alert: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        'rounded-md border p-2.5',
+        alert ? 'border-bear/40 bg-bear/10' : 'border-border',
+      )}
+    >
+      <div className="text-[10px] text-muted-foreground uppercase">{label}</div>
+      <div
+        className={cn(
+          'text-lg font-bold tabular-nums',
+          alert ? 'text-bear' : value < 0 ? 'text-warn' : 'text-bull',
+        )}
+      >
+        {value < 0 ? '-' : ''}
+        {Math.abs(value).toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}
+      </div>
+      <div className="text-[10px] text-muted-foreground">{currency}</div>
+    </div>
+  );
+}
+
 export function DashboardView() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -406,6 +623,9 @@ export function DashboardView() {
 
       {/* Equity curve (full width on top of detail row) */}
       {equity.length > 0 && <EquityCurvePanel points={equity} />}
+
+      {/* VaR / CVaR risk metrics panel (Sprint 7) */}
+      <RiskMetricsPanel balance={account.balance} />
 
       {/* System Status + Bot Control + Risk Status */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">

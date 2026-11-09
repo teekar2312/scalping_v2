@@ -1,0 +1,71 @@
+# Forex Scalping System - docker-compose.yml (Sprint 8 #18)
+#
+# Brings up:
+#   - backend   : FastAPI on :8000 (paper / dry mode - MT5 is Windows-only)
+#   - frontend  : Next.js on :3000 (standalone build)
+#   - ollama    : local LLM on :11434 (model: llama3.2:latest)
+#
+# Usage:
+#   cp download/python-backend/.env.example download/python-backend/.env
+#   docker compose up --build
+#
+# NOTE: MT5 cannot run inside Docker (Windows-only native binary).  The
+# backend container therefore exposes only non-MT5 features (paper mode,
+# backtest, analytics, secrets, audit log, VaR, stress test).  For live
+# trading, run the backend on the Windows host where MT5 is installed,
+# pointing at the same .env / data dir.
+
+services:
+  backend:
+    build: ./download/python-backend
+    container_name: forex-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./download/python-backend/.env
+    environment:
+      # Override a few env vars for the container context.
+      - PAPER_MODE=true
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+    volumes:
+      - backend-data:/app/data
+      - backend-logs:/app/logs
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build: .
+    container_name: forex-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_PYTHON_API_URL=http://backend:8000
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: forex-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
+    # Optional: pre-pull the model on first start
+    # command: ["serve"]
+    # post-start: docker exec forex-ollama ollama pull llama3.2:latest
+
+volumes:
+  backend-data:
+  backend-logs:
+  ollama-models:

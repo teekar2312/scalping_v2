@@ -1,0 +1,47 @@
+# Forex Scalping Backend - .dockerignore (Sprint 8 #18)
+#
+# Excludes everything we don't want in the build context.
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Virtual envs
+venv/
+env/
+.venv/
+
+# Local data + logs (mounted as volumes in prod)
+data/
+logs/
+
+# Editor / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Project files that shouldn't be baked into the image
+.env
+.env.local
+.env.*.local
+*.db
+*.bak
+*.log
+
+# Tests + CI (kept out of the runtime image)
+tests/
+.github/
+*.md
+README.md

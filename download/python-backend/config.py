@@ -143,6 +143,31 @@ NTP_DRIFT_TOLERANCE_S: Final[float] = 5.0
 
 
 # --------------------------------------------------------------------------- #
+# Sprint 5: Security + compliance env vars
+# --------------------------------------------------------------------------- #
+
+# Comma-separated list of valid API keys for Bearer auth.  Empty = DISABLED.
+API_KEYS: Final[str] = _get("API_KEYS", "")
+
+# SQLCipher 32-byte hex key for at-rest DB encryption.  Empty = plaintext.
+DB_ENCRYPTION_KEY: Final[str] = _get("DB_ENCRYPTION_KEY", "")
+
+# Fernet master key for the secrets.SecretManager.  Empty = plaintext fallback.
+SECRETS_MASTER_KEY: Final[str] = _get("SECRETS_MASTER_KEY", "")
+
+# Default admin password for the users table (auto-created on first run).
+ADMIN_PASSWORD: Final[str] = _get("ADMIN_PASSWORD", "")
+
+# HTTPS enforcement (redirect HTTP -> HTTPS).  Default False for dev.
+ENFORCE_HTTPS: Final[bool] = _get("ENFORCE_HTTPS", "false").lower() in (
+    "1", "true", "yes",
+)
+
+# Position sizing mode: "fixed" (default, 1% per trade) or "kelly" (quarter-Kelly).
+POSITION_SIZING_MODE: Final[str] = _get("POSITION_SIZING_MODE", "fixed").lower()
+
+
+# --------------------------------------------------------------------------- #
 # Dataclasses
 # --------------------------------------------------------------------------- #
 
@@ -356,5 +381,7 @@ __all__ = [
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     "MARGIN_WARNING_PCT", "MARGIN_CALL_PCT", "MARGIN_EMERGENCY_PCT",
     "NTP_DRIFT_TOLERANCE_S",
+    "API_KEYS", "DB_ENCRYPTION_KEY", "SECRETS_MASTER_KEY",
+    "ADMIN_PASSWORD", "ENFORCE_HTTPS", "POSITION_SIZING_MODE",
     "load_config", "settings",
 ]

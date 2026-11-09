@@ -33,6 +33,32 @@ import type {
   ServiceTestResult,
   WSEvent,
   WSEventType,
+  AuthLoginResponse,
+  AuthMeResponse,
+  ApiKeyListResponse,
+  CreateApiKeyResponse,
+  SecretListResponse,
+  RiskDisclosureStatus,
+  RiskDisclosureAckRequest,
+  RiskDisclosureAckResponse,
+  AuditChainVerifyResponse,
+  BappebtiStatus,
+  TradeReconstruction,
+  RiskMetrics,
+  StressScenario,
+  StressTestRequest,
+  StressTestResult,
+  MonteCarloRequest,
+  MonteCarloResult,
+  WalkForwardRequest,
+  WalkForwardResult,
+  KellyStats,
+  SlippageStats,
+  LatencyStats,
+  ReadinessResponse,
+  HealthzResponse,
+  EncryptionStatus,
+  VaRMethod,
 } from './types';
 import {
   getDemoAccount,
@@ -56,6 +82,25 @@ import {
   getDemoHolidays,
   getDemoBotMode,
   getDemoServiceTest,
+  getDemoAuthLogin,
+  getDemoAuthMe,
+  getDemoApiKeys,
+  getDemoSecrets,
+  getDemoRiskDisclosureStatus,
+  getDemoStressScenarios,
+  getDemoStressTestResults,
+  getDemoRiskMetrics,
+  getDemoMonteCarlo,
+  getDemoWalkForward,
+  getDemoKelly,
+  getDemoSlippageStats,
+  getDemoLatencyStats,
+  getDemoReadiness,
+  getDemoHealthz,
+  getDemoTradeReconstruction,
+  getDemoAuditChainVerify,
+  getDemoBappebtiStatus,
+  getDemoEncryptionStatus,
 } from './mock-data';
 
 // In demo mode (sandbox), use Next.js API routes that return mock data
@@ -64,6 +109,45 @@ const PYTHON_API = process.env.NEXT_PUBLIC_PYTHON_API_URL || '';
 const IS_DEMO = !PYTHON_API;
 
 export const DEMO_MODE = IS_DEMO;
+
+// --- Auth header injection (Sprint 5) --------------------------------------- //
+// Auth state is read lazily from the Zustand store via a module-level accessor.
+// The store is set by `auth.ts` at runtime so we don't create a circular import.
+let authKeyGetter: (() => string | null) | null = null;
+let authLogoutHandler: (() => void) | null = null;
+
+/**
+ * Wire the auth store getter so fetchAPI can attach the Bearer token and
+ * handle 401 by clearing auth + redirecting to the login view. Called once
+ * from the app shell during mount (see `auth.ts`).
+ */
+export function configureAuthAccessor(
+  getKey: () => string | null,
+  onUnauthorized: () => void,
+): void {
+  authKeyGetter = getKey;
+  authLogoutHandler = onUnauthorized;
+}
+
+function authHeaders(): Record<string, string> {
+  const key = authKeyGetter?.() ?? null;
+  return key ? { Authorization: `Bearer ${key}` } : {};
+}
+
+function mergeAuthHeaders(options?: RequestInit): RequestInit {
+  const headers = new Headers(options?.headers);
+  const auth = authHeaders();
+  for (const [k, v] of Object.entries(auth)) {
+    headers.set(k, v);
+  }
+  return { ...(options ?? {}), headers };
+}
+
+async function handleUnauthorized(res: Response): Promise<void> {
+  if (res.status === 401 && authLogoutHandler) {
+    authLogoutHandler();
+  }
+}
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   if (IS_DEMO) {
@@ -74,8 +158,11 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   } else {
     // Use Python FastAPI backend
     const url = `${PYTHON_API}${path}`;
-    const res = await fetch(url, options);
-    if (!res.ok) throw new Error(`Python API ${path} failed: ${res.status}`);
+    const res = await fetch(url, mergeAuthHeaders(options));
+    if (!res.ok) {
+      await handleUnauthorized(res);
+      throw new Error(`Python API ${path} failed: ${res.status}`);
+    }
     return res.json();
   }
 }
@@ -399,6 +486,11 @@ function buildPythonUrl(path: string): string {
   return `${PYTHON_API}${path}`;
 }
 
+function buildPythonUrlWithAuth(path: string): string {
+  // URL stays the same; auth handled via headers
+  return buildPythonUrl(path);
+}
+
 export async function downloadBackup(): Promise<Blob> {
   if (IS_DEMO) {
     // Generate a fake SQLite-style blob (JSON dump of demo data) for demo mode
@@ -411,7 +503,7 @@ export async function downloadBackup(): Promise<Blob> {
     };
     return new Blob([JSON.stringify(payload, null, 2)], { type: 'application/octet-stream' });
   }
-  const res = await fetch(buildPythonUrl('/api/backup'));
+  const res = await fetch(buildPythonUrlWithAuth('/api/backup'), mergeAuthHeaders());
   if (!res.ok) throw new Error(`backup failed: ${res.status}`);
   return res.blob();
 }
@@ -426,7 +518,8 @@ export async function restoreBackup(file: File): Promise<RestoreResponse> {
   }
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(buildPythonUrl('/api/restore'), { method: 'POST', body: form });
+  const opts: RequestInit = { method: 'POST', body: form };
+  const res = await fetch(buildPythonUrlWithAuth('/api/restore'), mergeAuthHeaders(opts));
   if (!res.ok) throw new Error(`restore failed: ${res.status}`);
   return res.json();
 }
@@ -437,12 +530,12 @@ export async function downloadPDF(weekStart: string): Promise<Blob> {
     const text = `WEEKLY JOURNAL — Week of ${weekStart}\n\nGenerated from demo data.\n\nThis is a placeholder PDF in demo mode.`;
     return new Blob([text], { type: 'application/pdf' });
   }
-  const res = await fetch(buildPythonUrl(`/api/export/pdf?week_start=${encodeURIComponent(weekStart)}`));
+  const res = await fetch(buildPythonUrlWithAuth(`/api/export/pdf?week_start=${encodeURIComponent(weekStart)}`), mergeAuthHeaders());
   if (!res.ok) throw new Error(`PDF export failed: ${res.status}`);
   return res.blob();
 }
 
-export async function downloadTax(year: number): Promise<Blob> {
+export async function downloadTax(year: number, format?: 'csv' | 'spt'): Promise<Blob> {
   if (IS_DEMO) {
     const trades = getDemoTradeHistory(30).filter(
       (t) => t.closeTime && t.closeTime.startsWith(String(year)),
@@ -467,8 +560,9 @@ export async function downloadTax(year: number): Promise<Blob> {
     );
     return new Blob([header + rows.join('\n')], { type: 'text/csv' });
   }
-  const res = await fetch(buildPythonUrl(`/api/export/tax?year=${year}`));
-  if (!res.ok) throw new Error(`tax CSV failed: ${res.status}`);
+  const fmt = format ? `&format=${format}` : '';
+  const res = await fetch(buildPythonUrlWithAuth(`/api/export/tax?year=${year}${fmt}`), mergeAuthHeaders());
+  if (!res.ok) throw new Error(`tax export failed: ${res.status}`);
   return res.blob();
 }
 
@@ -512,7 +606,14 @@ class WebSocketClient {
     if (!api) return '';
     // Convert http(s)://host -> ws(s)://host
     const wsUrl = api.replace(/^http/, 'ws');
-    return `${wsUrl.replace(/\/$/, '')}/ws`;
+    let base = `${wsUrl.replace(/\/$/, '')}/ws`;
+    // Append the auth token as a query param if available so the backend
+    // can authenticate the WS upgrade request.
+    const token = authKeyGetter?.() ?? null;
+    if (token) {
+      base += `?token=${encodeURIComponent(token)}`;
+    }
+    return base;
   }
 
   /** Subscribe to either a specific event type or all events ('*'). */
@@ -800,4 +901,253 @@ Filosofi: edge kecil dieksekusi ratusan kali dengan biaya terhitung, SL adaptif 
 Roadmap 9 bulan: 1-3 belajar, 4-6 backtest 300 trade, 7-9 forward demo, 10-12 mikro live, 13+ scale up.
 
 Pertanyaan spesifik? Tanya tentang: ADX, RR net, SL/ATR, session, pair, checklist, kill switch, atau psikologi scalper.`;
+}
+
+// --------------------------------------------------------------------------- //
+// Sprint 5-8: Auth, secrets, regulatory, advanced analytics, DevOps
+// --------------------------------------------------------------------------- //
+
+// --- Auth (Sprint 5) -------------------------------------------------------- //
+
+export async function login(username: string, password: string): Promise<AuthLoginResponse> {
+  if (IS_DEMO) return getDemoAuthLogin(username);
+  return fetchAPI<AuthLoginResponse>('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function getAuthMe(): Promise<AuthMeResponse> {
+  if (IS_DEMO) return getDemoAuthMe();
+  return fetchAPI<AuthMeResponse>('/api/auth/me');
+}
+
+export async function listApiKeys(): Promise<ApiKeyListResponse> {
+  if (IS_DEMO) return { keys: getDemoApiKeys() };
+  return fetchAPI<ApiKeyListResponse>('/api/auth/keys');
+}
+
+export async function createApiKey(label: string): Promise<CreateApiKeyResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    const id = `key_${Math.random().toString(36).slice(2, 10)}`;
+    return {
+      id,
+      key: `sk_demo_${id}_${Math.random().toString(36).slice(2, 24)}`,
+      label,
+      created_at: new Date().toISOString(),
+    };
+  }
+  return fetchAPI<CreateApiKeyResponse>('/api/auth/keys', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label }),
+  });
+}
+
+export async function revokeApiKey(id: string): Promise<{ ok: boolean }> {
+  if (IS_DEMO) return { ok: true };
+  return fetchAPI<{ ok: boolean }>(`/api/auth/keys/${id}`, { method: 'DELETE' });
+}
+
+// --- Secrets (Sprint 5) ----------------------------------------------------- //
+
+export async function listSecrets(): Promise<SecretListResponse> {
+  if (IS_DEMO) return { secrets: getDemoSecrets() };
+  return fetchAPI<SecretListResponse>('/api/secrets');
+}
+
+export async function setSecret(name: string, value: string): Promise<{ ok: boolean }> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 300));
+    return { ok: true };
+  }
+  return fetchAPI<{ ok: boolean }>(`/api/secrets/${encodeURIComponent(name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+}
+
+export async function getSecret(name: string): Promise<{ name: string; value: string | null }> {
+  if (IS_DEMO) {
+    return { name, value: null };
+  }
+  return fetchAPI<{ name: string; value: string | null }>(`/api/secrets/${encodeURIComponent(name)}`);
+}
+
+// --- Risk disclosure (ack + status) (Sprint 5/6) ---------------------------- //
+
+export async function getRiskDisclosureStatus(): Promise<RiskDisclosureStatus> {
+  if (IS_DEMO) return getDemoRiskDisclosureStatus();
+  return fetchAPI<RiskDisclosureStatus>('/api/risk-disclosure/status');
+}
+
+export async function acknowledgeRiskDisclosure(
+  body: RiskDisclosureAckRequest,
+): Promise<RiskDisclosureAckResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    const now = new Date();
+    const expiry = new Date(now.getTime() + 30 * 86400_000);
+    return {
+      ok: true,
+      acknowledged_at: now.toISOString(),
+      expires_at: expiry.toISOString(),
+    };
+  }
+  return fetchAPI<RiskDisclosureAckResponse>('/api/risk-disclosure/acknowledge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// --- Audit chain verification (Sprint 6) ------------------------------------ //
+
+export async function verifyAuditChain(): Promise<AuditChainVerifyResponse> {
+  if (IS_DEMO) return getDemoAuditChainVerify();
+  return fetchAPI<AuditChainVerifyResponse>('/api/audit-log/verify');
+}
+
+// --- Regulatory (Sprint 6) -------------------------------------------------- //
+
+export async function getBappebtiStatus(): Promise<BappebtiStatus> {
+  if (IS_DEMO) return getDemoBappebtiStatus();
+  return fetchAPI<BappebtiStatus>('/api/regulatory/bappebti-status');
+}
+
+// --- Trade reconstruction (Sprint 7) ---------------------------------------- //
+
+export async function getTradeReconstruction(ticket: number): Promise<TradeReconstruction> {
+  if (IS_DEMO) return getDemoTradeReconstruction(ticket);
+  return fetchAPI<TradeReconstruction>(`/api/trade/${ticket}/reconstruct`);
+}
+
+// --- VaR / CVaR (Sprint 7) -------------------------------------------------- //
+
+export async function getRiskMetrics(
+  confidence: number,
+  days: number,
+  method?: VaRMethod,
+): Promise<RiskMetrics> {
+  if (IS_DEMO) return getDemoRiskMetrics(confidence, days, method);
+  const params = new URLSearchParams();
+  params.set('confidence', String(confidence));
+  params.set('days', String(days));
+  if (method) params.set('method', method);
+  return fetchAPI<RiskMetrics>(`/api/analytics/var?${params.toString()}`);
+}
+
+// --- Stress test (Sprint 7) ------------------------------------------------- //
+
+export async function listStressScenarios(): Promise<StressScenario[]> {
+  if (IS_DEMO) return getDemoStressScenarios();
+  return fetchAPI<StressScenario[]>('/api/analytics/stress-test/scenarios');
+}
+
+export async function runStressTest(body: StressTestRequest): Promise<StressTestResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 700));
+    const all = getDemoStressTestResults();
+    const found = all.find((r) => r.scenario === body.scenario);
+    return found ?? all[0];
+  }
+  return fetchAPI<StressTestResult>('/api/analytics/stress-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getStressTestResult(id: string): Promise<StressTestResult> {
+  if (IS_DEMO) {
+    const all = getDemoStressTestResults();
+    return all.find((r) => r.id === id) ?? all[0];
+  }
+  return fetchAPI<StressTestResult>(`/api/analytics/stress-test/results/${id}`);
+}
+
+// --- Monte Carlo (Sprint 7) ------------------------------------------------- //
+
+export async function runMonteCarlo(body: MonteCarloRequest): Promise<MonteCarloResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 900));
+    return getDemoMonteCarlo(body);
+  }
+  return fetchAPI<MonteCarloResult>('/api/backtest/monte-carlo', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// --- Walk-forward (Sprint 7) ------------------------------------------------ //
+
+export async function runWalkForward(body: WalkForwardRequest): Promise<WalkForwardResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 800));
+    return getDemoWalkForward(body);
+  }
+  return fetchAPI<WalkForwardResult>('/api/backtest/walk-forward', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// --- Kelly criterion (Sprint 7) --------------------------------------------- //
+
+export async function getKellyStats(): Promise<KellyStats> {
+  if (IS_DEMO) return getDemoKelly();
+  return fetchAPI<KellyStats>('/api/analytics/kelly');
+}
+
+// --- Slippage & Latency (Sprint 7) ------------------------------------------ //
+
+export async function getSlippageStats(days = 30): Promise<SlippageStats> {
+  if (IS_DEMO) return getDemoSlippageStats(days);
+  return fetchAPI<SlippageStats>(`/api/analytics/slippage?days=${days}`);
+}
+
+export async function getLatencyStats(hours = 24): Promise<LatencyStats> {
+  if (IS_DEMO) return getDemoLatencyStats(hours);
+  return fetchAPI<LatencyStats>(`/api/analytics/latency?hours=${hours}`);
+}
+
+// --- Health & readiness (Sprint 8 — DevOps) --------------------------------- //
+
+export async function getHealthz(): Promise<HealthzResponse> {
+  if (IS_DEMO) return getDemoHealthz();
+  return fetchAPI<HealthzResponse>('/healthz');
+}
+
+export async function getReadiness(): Promise<ReadinessResponse> {
+  if (IS_DEMO) return getDemoReadiness();
+  return fetchAPI<ReadinessResponse>('/readyz');
+}
+
+// --- Encryption status (SQLCipher) ------------------------------------------ //
+
+export async function getEncryptionStatus(): Promise<EncryptionStatus> {
+  if (IS_DEMO) return getDemoEncryptionStatus();
+  return fetchAPI<EncryptionStatus>('/api/security/encryption-status');
+}
+
+// --- Change password (Settings → Authentication & Security) ------------------ //
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ ok: boolean; message: string }> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return { ok: true, message: 'Password changed (demo mode)' };
+  }
+  return fetchAPI<{ ok: boolean; message: string }>('/api/auth/change-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
 }

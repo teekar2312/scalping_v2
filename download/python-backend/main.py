@@ -43,10 +43,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from config import settings
 import config as cfg
@@ -60,6 +64,11 @@ from database import (
     get_performance_attribution, get_compliance_score,
     set_trade_emotional_state, list_emotional_summary,
     list_open_trades,
+    # Sprint 5/6/7 imports
+    verify_audit_chain, list_trade_events,
+    insert_risk_acknowledgment, get_latest_risk_acknowledgment,
+    list_latency_samples,
+    get_stress_test_result, insert_stress_test_result,
 )
 from ollama_analyzer import get_analyzer, close_default_client as close_ai
 from tiingo_calendar import get_calendar, close_default_client as close_cal
@@ -69,21 +78,79 @@ from indicators import (
     ema, ema_series, vwap, atr, adx, rsi, bollinger_bands,
     Candle, candle_pattern_detection,
 )
+# Sprint 5/6/7/8 new modules
+from auth import (
+    get_api_key, get_auth, require_role, require_admin, require_trader,
+    require_viewer, login as auth_login,
+)
+from secrets import get_secret_manager
+from metrics import (
+    MetricsMiddleware, RequestIDMiddleware, update_trading_metrics,
+    render_metrics, REQUEST_ID_CTX, trading_total_trades,
+    trading_signals_generated, trading_kill_switch_triggered,
+)
+from risk_analytics import (
+    calculate_var, calculate_cvar, get_returns_from_trades,
+)
+from stress_test import StressTester, STRESS_SCENARIOS
+from backtest import MonteCarloEngine, WalkForwardAnalyzer
+from regulatory_id import (
+    calculate_pph_forex, format_spt_year, check_bappebti_compliance,
+    BAPPEBTI_REQUIREMENTS, BAPPEBTI_REGISTERED_BROKERS,
+)
+from risk_manager import KellySizer
 
 # --------------------------------------------------------------------------- #
-# Logging
+# Logging - structured JSON (Sprint 8 #20)
 # --------------------------------------------------------------------------- #
 
 _log_path = Path(settings.paths.log_path)
 _log_path.parent.mkdir(parents=True, exist_ok=True)
+
+try:
+    from pythonjsonlogger import jsonlogger as _jl
+    _JSON_LOGGER_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _jl = None  # type: ignore
+    _JSON_LOGGER_AVAILABLE = False
+
+# Build a JSON formatter that injects the request_id / trace_id from the
+# contextvar when present.
+class _ContextJsonFormatter(_jl.JsonFormatter if _JSON_LOGGER_AVAILABLE else object):  # type: ignore[misc]
+    """JSON formatter that includes request_id + trace_id from contextvars."""
+
+    def add_fields(self, log_record, record, message_dict):  # type: ignore[override]
+        if _JSON_LOGGER_AVAILABLE:
+            super().add_fields(log_record, record, message_dict)
+        rid = REQUEST_ID_CTX.get("") if REQUEST_ID_CTX else ""
+        tid = REQUEST_ID_CTX.get("") if REQUEST_ID_CTX else ""
+        log_record["request_id"] = rid
+        log_record["trace_id"] = tid
+        # timestamp + level normalised
+        log_record["timestamp"] = datetime.now(timezone.utc).isoformat()
+        log_record["level"] = record.levelname
+
+_file_handler = logging.handlers.RotatingFileHandler(
+    _log_path, maxBytes=10 * 1024 * 1024, backupCount=5,
+)
+_stdout_handler = logging.StreamHandler(sys.stdout)
+
+if _JSON_LOGGER_AVAILABLE:
+    _fmt = _ContextJsonFormatter(
+        "%(timestamp)s %(level)s %(name)s %(message)s",
+        rename_fields={"name": "logger"},
+    )
+    _file_handler.setFormatter(_fmt)
+    _stdout_handler.setFormatter(_fmt)
+else:
+    _file_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    _stdout_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+
 logging.basicConfig(
     level=getattr(logging, settings.paths.log_level, logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.handlers.RotatingFileHandler(
-            _log_path, maxBytes=10 * 1024 * 1024, backupCount=5),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[_file_handler, _stdout_handler],
 )
 logger = logging.getLogger("forex_backend")
 
@@ -145,18 +212,73 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ---- Sprint 5 #4: rate limiter (slowapi) ---------------------------------- #
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# ---- Sprint 5 #5: HTTPS redirect (optional) ------------------------------- #
+if cfg.ENFORCE_HTTPS:
+    app.add_middleware(HTTPSRedirectMiddleware)
+    logger.info("HTTPS enforcement is ON (ENFORCE_HTTPS=true)")
+
+# ---- Sprint 5 #7: CORS tightening ----------------------------------------- #
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.server.cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,                # Bearer token, not cookies
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
 
+# ---- Sprint 8 #20: request id + metrics middleware ------------------------ #
+# Outer = RequestID (sets contextvar), inner = Metrics (records dur+count).
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(RequestIDMiddleware)
+
+
+# ---- Sprint 5 #5: security headers ---------------------------------------- #
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    """Inject X-Content-Type-Options, X-Frame-Options, HSTS on every response."""
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    if cfg.ENFORCE_HTTPS:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
+
 
 # --------------------------------------------------------------------------- #
-# Pydantic models
+# Pydantic models (Sprint 5 #8: input validation tightening)
 # --------------------------------------------------------------------------- #
+
+# Whitelist of symbols accepted by /api/chart/{symbol} and other symbol params.
+_SYMBOL_WHITELIST: set[str] = set(settings.pairs) | set(settings.mt5_symbols)
+
+
+class SymbolValidator:
+    """Pydantic v2-style symbol whitelist validator (used as a field
+    validator on request bodies that contain a ``symbol`` field).
+    """
+
+    @classmethod
+    def validate(cls, v: str) -> str:
+        if v is None:
+            raise ValueError("symbol is required")
+        sym = str(v).upper().replace("/", "")
+        if sym not in _SYMBOL_WHITELIST:
+            # Allow any pair when the whitelist is empty (paper mode etc.)
+            if _SYMBOL_WHITELIST:
+                raise ValueError(
+                    f"symbol '{sym}' not in whitelist {sorted(_SYMBOL_WHITELIST)}"
+                )
+        return sym
+
 
 class BotActionResponse(BaseModel):
     ok: bool
@@ -165,12 +287,35 @@ class BotActionResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
-    history: list[dict[str, str]] = Field(default_factory=list)
+    message: str = Field(min_length=1, max_length=4_000)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=200)
+
+
+# ---- Sprint 5 #8: strict AnalyzeRequest.signal ----------------------------- #
+
+class SignalData(BaseModel):
+    """Strict representation of a strategy signal submitted to /api/ai/analyze."""
+    symbol: str = Field(min_length=3, max_length=20)
+    direction: str = Field(pattern="^(buy|sell)$")
+    entry_price: float = Field(gt=0)
+    sl: float | None = Field(default=None, gt=0)
+    tp1: float | None = Field(default=None, gt=0)
+    tp2: float | None = Field(default=None, gt=0)
+    atr: float | None = Field(default=None, ge=0)
+    adx: float | None = Field(default=None, ge=0, le=100)
+    rr_net: float | None = Field(default=None)
+    regime: str | None = Field(default=None, pattern="^(TRENDING|TRANSITION|RANGING)$")
+    session: str | None = Field(default=None, max_length=20)
+    checklist: dict[str, bool] | None = None
+
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, v: str) -> str:
+        return SymbolValidator.validate(v)
 
 
 class AnalyzeRequest(BaseModel):
-    signal: dict[str, Any]
+    signal: SignalData
 
 
 class SettingsUpdate(BaseModel):
@@ -189,6 +334,31 @@ class BacktestRequest(BaseModel):
     end_date: str
     initial_balance: float = 10_000.0
 
+    @field_validator("symbol")
+    @classmethod
+    def _check_symbol(cls, v: str) -> str:
+        return SymbolValidator.validate(v)
+
+    @field_validator("initial_balance")
+    @classmethod
+    def _check_balance(cls, v: float) -> float:
+        if v <= 0 or v > 10_000_000:
+            raise ValueError("initial_balance must be in (0, 10_000_000]")
+        return v
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> "BacktestRequest":
+        try:
+            sd = datetime.fromisoformat(self.start_date)
+            ed = datetime.fromisoformat(self.end_date)
+        except Exception as exc:
+            raise ValueError(f"invalid ISO dates: {exc}") from exc
+        if sd >= ed:
+            raise ValueError("start_date must be < end_date")
+        if (ed - sd).days > 365:
+            raise ValueError("date range must not exceed 365 days")
+        return self
+
 
 class BotModeRequest(BaseModel):
     mode: str  # "PAPER" | "LIVE" | "DRY"
@@ -206,6 +376,56 @@ class EmotionRequest(BaseModel):
 class AttributionRange(BaseModel):
     start_date: datetime
     end_date: datetime
+
+    @model_validator(mode="after")
+    def _check(self) -> "AttributionRange":
+        if self.start_date >= self.end_date:
+            raise ValueError("start_date must be < end_date")
+        if (self.end_date - self.start_date).days > 366:
+            raise ValueError("range must not exceed 366 days")
+        return self
+
+
+# ---- Sprint 5 #6: auth request/response models ---------------------------- #
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+class SecretStoreRequest(BaseModel):
+    value: str = Field(min_length=1, max_length=8_192)
+
+
+class RiskAcknowledgmentRequest(BaseModel):
+    version: str = Field(min_length=1, max_length=32)
+
+
+# ---- Sprint 7 #14 / #15: analytics request bodies ------------------------ #
+
+class StressTestRequest(BaseModel):
+    trades_period_days: int = Field(default=90, ge=1, le=365)
+    balance: float = Field(default=10_000.0, gt=0, le=10_000_000)
+
+
+class MonteCarloRequest(BaseModel):
+    iterations: int = Field(default=1000, ge=10, le=10_000)
+    trades_period: int = Field(default=90, ge=1, le=365)
+    mode: str = Field(default="trade_resample",
+                      pattern="^(trade_resample|return_perturbation)$")
+    noise_std: float = Field(default=0.0, ge=0, le=100)
+
+
+class WalkForwardRequest(BaseModel):
+    in_sample_window: int = Field(default=90, ge=10, le=500)
+    out_sample_window: int = Field(default=30, ge=5, le=200)
+
+
+# ---- Sprint 5 #8: volume field validation --------------------------------- #
+
+class VolumeParam(BaseModel):
+    """Reusable volume validator: positive float, min 0.01, max 100."""
+    volume: float = Field(gt=0, ge=0.01, le=100)
 
 
 # --------------------------------------------------------------------------- #
@@ -251,8 +471,63 @@ async def root() -> dict[str, Any]:
     }
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, Any]:
+    """Liveness probe - return 200 if the process is alive (Sprint 8 #20)."""
+    return {"status": "alive", "ts": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/readyz")
+async def readyz() -> dict[str, Any]:
+    """Readiness probe - return 200 if DB + MT5 + Ollama are all available.
+
+    Returns 503 if any critical dependency is down (Sprint 8 #20).
+    """
+    ok = True
+    parts: dict[str, Any] = {}
+    try:
+        get_db()
+        parts["db"] = "ok"
+    except Exception as exc:
+        ok = False
+        parts["db"] = f"error: {exc}"
+    if MT5_AVAILABLE:
+        try:
+            parts["mt5"] = "ok" if get_connector().connected else "disconnected"
+            if not get_connector().connected:
+                ok = False
+        except Exception as exc:
+            ok = False
+            parts["mt5"] = f"error: {exc}"
+    else:
+        parts["mt5"] = "not_installed"
+    try:
+        analyzer = get_analyzer()
+        if await analyzer.is_available():
+            parts["ollama"] = "ok"
+        else:
+            parts["ollama"] = "unavailable"
+            ok = False
+    except Exception as exc:
+        parts["ollama"] = f"error: {exc}"
+        ok = False
+    body = {"ready": ok, "ts": datetime.now(timezone.utc).isoformat(), **parts}
+    if not ok:
+        return JSONResponse(status_code=503, content=body)
+    return body
+
+
+@app.get("/metrics")
+async def metrics_endpoint() -> Response:
+    """Prometheus metrics endpoint (Sprint 8 #20)."""
+    body, content_type = render_metrics()
+    return Response(content=body, media_type=content_type)
+
+
 @app.get("/api/status")
-async def api_status() -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_status(request: Request,
+                     _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Bot status, MT5 connection, account summary."""
     engine = get_engine()
     snap = engine.snapshot()
@@ -282,11 +557,15 @@ async def api_status() -> dict[str, Any]:
     snap["bot_state"] = get_bot_state()
     snap["mt5_available"] = MT5_AVAILABLE
     snap["time"] = datetime.now(timezone.utc).isoformat()
+    # Update Prometheus gauges (Sprint 8 #20)
+    update_trading_metrics(snap, account_summary)
     return snap
 
 
 @app.get("/api/account")
-async def api_account() -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_account(request: Request,
+                      _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Account info from MT5."""
     if not MT5_AVAILABLE or not get_connector().connected:
         return _mt5_unavailable_response()  # type: ignore[return-value]
@@ -306,7 +585,10 @@ async def api_account() -> dict[str, Any]:
 
 
 @app.get("/api/positions")
-async def api_positions(symbol: str | None = None) -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_positions(request: Request,
+                        symbol: str | None = None,
+                        _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Open positions, optionally filtered by symbol."""
     if not MT5_AVAILABLE or not get_connector().connected:
         return {"positions": [], "mt5_connected": False}
@@ -333,18 +615,49 @@ async def api_positions(symbol: str | None = None) -> dict[str, Any]:
 
 
 @app.get("/api/signals")
-async def api_signals(limit: int = 50,
-                      symbol: str | None = None) -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_signals(request: Request,
+                      limit: int = 50,
+                      symbol: str | None = None,
+                      _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Recent signals from SQLite."""
     rows = list_signals(limit=limit, symbol=symbol)
     return {"count": len(rows), "signals": rows}
 
 
 @app.post("/api/bot/start", response_model=BotActionResponse)
-async def api_bot_start() -> BotActionResponse:
+@limiter.limit("10/minute")
+async def api_bot_start(request: Request,
+                        _auth: dict = Depends(require_trader)
+                        ) -> BotActionResponse:
     """Start auto-trading.  Runs the pre-live checklist first; returns 400
     with blocking issues if anything critical is missing.
+
+    Sprint 6 #9: also enforces a signed risk-disclosure acknowledgment -
+    returns 403 if no acknowledgment exists or the latest one is older than
+    30 days.
     """
+    # ---- Risk disclosure gate (Sprint 6 #9) ---- #
+    ack = get_latest_risk_acknowledgment()
+    if ack is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"ok": False, "message": "Risk disclosure not acknowledged. "
+                    "POST /api/risk-disclosure/acknowledge first.",
+                    "acknowledged": False},
+        )
+    ack_dt = (datetime.fromisoformat(ack["acknowledged_at"].replace("Z", "+00:00"))
+              if ack.get("acknowledged_at") else None)
+    if ack_dt and ack_dt.tzinfo is None:
+        ack_dt = ack_dt.replace(tzinfo=timezone.utc)
+    if ack_dt is None or (datetime.now(timezone.utc) - ack_dt).days > 30:
+        raise HTTPException(
+            status_code=403,
+            detail={"ok": False, "message": "Risk disclosure acknowledgment "
+                    "expired (>30 days). Re-acknowledge to continue.",
+                    "acknowledged": True, "expired": True,
+                    "acknowledged_at": ack.get("acknowledged_at")},
+        )
     checklist = await pre_live_check()
     if not checklist["overall_ready"]:
         raise HTTPException(
@@ -365,7 +678,10 @@ async def api_bot_start() -> BotActionResponse:
 
 
 @app.post("/api/bot/stop", response_model=BotActionResponse)
-async def api_bot_stop() -> BotActionResponse:
+@limiter.limit("10/minute")
+async def api_bot_stop(request: Request,
+                       _auth: dict = Depends(require_trader)
+                       ) -> BotActionResponse:
     """Stop bot (does not close positions)."""
     engine = get_engine()
     result = await engine.stop(reason="manual")
@@ -373,16 +689,26 @@ async def api_bot_stop() -> BotActionResponse:
 
 
 @app.post("/api/bot/kill", response_model=BotActionResponse)
-async def api_bot_kill() -> BotActionResponse:
+@limiter.limit("5/minute")
+async def api_bot_kill(request: Request,
+                       _auth: dict = Depends(require_trader)
+                       ) -> BotActionResponse:
     """Emergency kill switch: close all + stop + lock."""
     engine = get_engine()
     result = await engine.kill(reason="manual")
     msg = f"killed: closed={len(result.get('closed', []))} - {result.get('reason')}"
+    try:
+        trading_kill_switch_triggered.inc()  # type: ignore[union-attr]
+    except Exception:
+        pass
     return BotActionResponse(ok=result["ok"], message=msg)
 
 
 @app.post("/api/bot/release-kill", response_model=BotActionResponse)
-async def api_bot_release_kill() -> BotActionResponse:
+@limiter.limit("5/minute")
+async def api_bot_release_kill(request: Request,
+                               _auth: dict = Depends(require_trader)
+                               ) -> BotActionResponse:
     """Release the kill switch (manual override)."""
     engine = get_engine()
     result = await engine.release_kill()
@@ -397,7 +723,10 @@ async def api_bot_release_kill() -> BotActionResponse:
 # --------------------------------------------------------------------------- #
 
 @app.post("/api/bot/mode")
-async def api_bot_mode(req: BotModeRequest) -> dict[str, Any]:
+@limiter.limit("10/minute")
+async def api_bot_mode(request: Request,
+                       req: BotModeRequest,
+                       _auth: dict = Depends(require_trader)) -> dict[str, Any]:
     """Switch bot mode (LIVE / PAPER / DRY)."""
     engine = get_engine()
     result = await engine.set_mode(req.mode)
@@ -407,14 +736,19 @@ async def api_bot_mode(req: BotModeRequest) -> dict[str, Any]:
 
 
 @app.get("/api/bot/mode")
-async def api_bot_get_mode() -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_bot_get_mode(request: Request,
+                           _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Get current bot mode."""
     engine = get_engine()
     return engine.get_mode()
 
 
 @app.post("/api/bot/dry-run")
-async def api_bot_dry_run(req: DryRunRequest) -> dict[str, Any]:
+@limiter.limit("10/minute")
+async def api_bot_dry_run(request: Request,
+                          req: DryRunRequest,
+                          _auth: dict = Depends(require_trader)) -> dict[str, Any]:
     """Toggle dry-run mode (true = no orders placed, signals only)."""
     engine = get_engine()
     mode = "dry" if req.enabled else "live"
@@ -429,12 +763,15 @@ async def api_bot_dry_run(req: DryRunRequest) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/audit-log")
-async def api_audit_log(limit: int = 200,
+@limiter.limit("60/minute")
+async def api_audit_log(request: Request,
+                        limit: int = 200,
                         offset: int = 0,
                         event_type: str | None = None,
                         severity: str | None = None,
                         start: str | None = None,
-                        end: str | None = None) -> dict[str, Any]:
+                        end: str | None = None,
+                        _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Query the audit log."""
     start_dt = (datetime.fromisoformat(start) if start else None)
     end_dt = (datetime.fromisoformat(end) if end else None)
@@ -446,11 +783,27 @@ async def api_audit_log(limit: int = 200,
 
 
 # --------------------------------------------------------------------------- #
+# Sprint 6 #10: audit chain verification
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/audit-log/verify")
+@limiter.limit("10/minute")
+async def api_audit_log_verify(request: Request,
+                               _auth: dict = Depends(get_api_key)
+                               ) -> dict[str, Any]:
+    """Verify the audit-log hash chain integrity."""
+    return verify_audit_chain()
+
+
+# --------------------------------------------------------------------------- #
 # Audit-fix Sprint 3 #19: Equity curve endpoint
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/equity-curve")
-async def api_equity_curve(hours: float = 24.0) -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_equity_curve(request: Request,
+                           hours: float = 24.0,
+                           _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Return the equity-curve time series for the last N hours."""
     rows = list_equity_curve(hours=hours)
     return {"count": len(rows), "samples": rows}
@@ -461,9 +814,12 @@ async def api_equity_curve(hours: float = 24.0) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/analytics/attribution")
-async def api_analytics_attribution(start: str | None = None,
-                                     end: str | None = None
-                                     ) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_analytics_attribution(request: Request,
+                                    start: str | None = None,
+                                    end: str | None = None,
+                                    _auth: dict = Depends(get_api_key)
+                                    ) -> dict[str, Any]:
     """Performance attribution by session/setup/regime/hour/day/pair."""
     end_dt = (datetime.fromisoformat(end) if end
               else datetime.now(timezone.utc))
@@ -473,9 +829,12 @@ async def api_analytics_attribution(start: str | None = None,
 
 
 @app.get("/api/analytics/compliance")
-async def api_analytics_compliance(start: str | None = None,
-                                    end: str | None = None
-                                    ) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_analytics_compliance(request: Request,
+                                   start: str | None = None,
+                                   end: str | None = None,
+                                   _auth: dict = Depends(get_api_key)
+                                   ) -> dict[str, Any]:
     """Compliance score (checklist pass-rate, RR compliance)."""
     end_dt = (datetime.fromisoformat(end) if end
               else datetime.now(timezone.utc))
@@ -489,8 +848,11 @@ async def api_analytics_compliance(start: str | None = None,
 # --------------------------------------------------------------------------- #
 
 @app.post("/api/trade/{trade_id}/emotion")
-async def api_trade_emotion(trade_id: int,
-                             req: EmotionRequest) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_trade_emotion(request: Request,
+                            trade_id: int,
+                            req: EmotionRequest,
+                            _auth: dict = Depends(require_trader)) -> dict[str, Any]:
     """Tag a closed trade with an emotional state + optional note."""
     ok = set_trade_emotional_state(int(trade_id), req.state, req.note)
     if not ok:
@@ -500,7 +862,11 @@ async def api_trade_emotion(trade_id: int,
 
 
 @app.get("/api/analytics/emotions")
-async def api_analytics_emotions(limit: int = 200) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_analytics_emotions(request: Request,
+                                 limit: int = 200,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
     """Summary of emotional-state logs across recent trades."""
     return list_emotional_summary(limit=limit)
 
@@ -510,7 +876,10 @@ async def api_analytics_emotions(limit: int = 200) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/pre-live-check")
-async def api_pre_live_check() -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_pre_live_check(request: Request,
+                             _auth: dict = Depends(get_api_key)
+                             ) -> dict[str, Any]:
     """Return the pre-live readiness checklist."""
     return await pre_live_check()
 
@@ -608,7 +977,9 @@ async def pre_live_check() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/time-sync")
-async def api_time_sync() -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_time_sync(request: Request,
+                        _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Return NTP drift information."""
     return await check_ntp_sync()
 
@@ -651,7 +1022,9 @@ async def check_ntp_sync() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/backup")
-async def api_backup() -> StreamingResponse:
+@limiter.limit("2/minute")
+async def api_backup(request: Request,
+                     _auth: dict = Depends(require_admin)) -> StreamingResponse:
     """Dump the SQLite DB to a downloadable file."""
     db_path = Path(settings.paths.db_path)
     if not db_path.exists():
@@ -669,7 +1042,10 @@ async def api_backup() -> StreamingResponse:
 
 
 @app.post("/api/restore")
-async def api_restore(file: UploadFile) -> dict[str, Any]:
+@limiter.limit("2/minute")
+async def api_restore(request: Request,
+                      file: UploadFile,
+                      _auth: dict = Depends(require_admin)) -> dict[str, Any]:
     """Restore the SQLite DB from an uploaded backup file."""
     db_path = Path(settings.paths.db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -691,7 +1067,10 @@ async def api_restore(file: UploadFile) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/export/pdf")
-async def api_export_pdf(week_start: str) -> FileResponse:
+@limiter.limit("5/minute")
+async def api_export_pdf(request: Request,
+                         week_start: str,
+                         _auth: dict = Depends(require_trader)) -> FileResponse:
     """Generate and return the weekly PDF journal."""
     from pdf_export import JournalPDFExporter, REPORTLAB_AVAILABLE
     if not REPORTLAB_AVAILABLE:
@@ -714,14 +1093,40 @@ async def api_export_pdf(week_start: str) -> FileResponse:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/export/tax")
-async def api_export_tax(year: int) -> StreamingResponse:
-    """Return a CSV of closed trades for the given tax year (FIFO)."""
+@limiter.limit("5/minute")
+async def api_export_tax(request: Request,
+                         year: int,
+                         format: str | None = None,
+                         broker: str | None = None,
+                         npwp: str | None = None,
+                         _auth: dict = Depends(require_trader)
+                         ) -> StreamingResponse:
+    """Return a CSV of closed trades for the given tax year (FIFO).
+
+    Sprint 6 #11: when ``format=spt`` is set, the response uses the SPT
+    (Surat Pemberitahuan) layout including PPh Final 0.1% per trade.
+    """
     rows = list_trades(limit=10_000, status="closed")
     year_rows = [r for r in rows
                  if r.get("close_time")
                  and r["close_time"][:4] == str(year)]
     # FIFO is implicit because list_trades is ordered by id desc; reverse.
     year_rows = list(reversed(year_rows))
+
+    # Sprint 6 #11: SPT format with PPh 0.1%
+    if format and format.lower() == "spt":
+        broker_name = broker or settings.mt5.server
+        csv_text = format_spt_year(year, year_rows,
+                                   broker_name=broker_name,
+                                   npwp=npwp)
+        fname = f"spt_{year}.csv"
+        return StreamingResponse(
+            iter([csv_text.encode()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={fname}"},
+        )
+
+    # Default CSV (legacy format)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
@@ -781,11 +1186,81 @@ By enabling auto-trading you acknowledge that:
 If you do not understand these risks, do not enable auto-trading.
 """
 
+RISK_DISCLOSURE_VERSION = "v2.0-2026"
+
 
 @app.get("/api/risk-disclosure")
-async def api_risk_disclosure() -> dict[str, Any]:
-    """Return the risk disclosure text."""
-    return {"text": RISK_DISCLOSURE}
+@limiter.limit("30/minute")
+async def api_risk_disclosure(request: Request,
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Return the risk disclosure text + current version (Sprint 6 #9)."""
+    return {"text": RISK_DISCLOSURE,
+            "current_version": RISK_DISCLOSURE_VERSION}
+
+
+# ---- Sprint 6 #9: signed risk acknowledgment ----------------------------- #
+
+@app.post("/api/risk-disclosure/acknowledge")
+@limiter.limit("10/minute")
+async def api_risk_disclosure_ack(request: Request,
+                                  req: RiskAcknowledgmentRequest,
+                                  _auth: dict = Depends(require_trader)
+                                  ) -> dict[str, Any]:
+    """Persist a signed risk-disclosure acknowledgment with timestamp + IP.
+
+    Body: ``{"version": "v2.0-2026"}``.
+    """
+    ip = (request.client.host if request.client else None)
+    ua = request.headers.get("user-agent")
+    user = (_auth.get("user") or {})
+    user_id = user.get("id") if isinstance(user, dict) else None
+    row_id = insert_risk_acknowledgment(
+        version=req.version,
+        user_id=user_id,
+        ip_address=ip,
+        user_agent=ua,
+    )
+    ack = get_latest_risk_acknowledgment(user_id=user_id)
+    return {
+        "success": True,
+        "acknowledgment_id": row_id,
+        "acknowledged_at": ack["acknowledged_at"] if ack else None,
+        "version": req.version,
+        "ip_address": ip,
+    }
+
+
+@app.get("/api/risk-disclosure/status")
+@limiter.limit("30/minute")
+async def api_risk_disclosure_status(request: Request,
+                                     _auth: dict = Depends(get_api_key)
+                                     ) -> dict[str, Any]:
+    """Return the latest acknowledgment and whether it's still valid
+    (must be within the last 30 days)."""
+    user = (_auth.get("user") or {})
+    user_id = user.get("id") if isinstance(user, dict) else None
+    ack = get_latest_risk_acknowledgment(user_id=user_id)
+    if ack is None:
+        return {"acknowledged": False, "valid": False,
+                "current_version": RISK_DISCLOSURE_VERSION}
+    ack_dt_str = ack.get("acknowledged_at") or ""
+    try:
+        ack_dt = datetime.fromisoformat(ack_dt_str.replace("Z", "+00:00"))
+        if ack_dt.tzinfo is None:
+            ack_dt = ack_dt.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - ack_dt).days
+        valid = age_days <= 30
+    except Exception:
+        valid = False
+        age_days = None
+    return {
+        "acknowledged": True,
+        "valid": valid,
+        "age_days": age_days,
+        "current_version": RISK_DISCLOSURE_VERSION,
+        "acknowledgment": ack,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -793,7 +1268,9 @@ async def api_risk_disclosure() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/test/mt5")
-async def api_test_mt5() -> dict[str, Any]:
+@limiter.limit("10/minute")
+async def api_test_mt5(request: Request,
+                       _auth: dict = Depends(require_trader)) -> dict[str, Any]:
     """Probe MT5 (initialize + get_account_info)."""
     if not MT5_AVAILABLE:
         return {"ok": False, "message": "MetaTrader5 package not installed",
@@ -818,7 +1295,9 @@ async def api_test_mt5() -> dict[str, Any]:
 
 
 @app.get("/api/test/ollama")
-async def api_test_ollama() -> dict[str, Any]:
+@limiter.limit("10/minute")
+async def api_test_ollama(request: Request,
+                          _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Probe Ollama (GET /api/tags)."""
     t0 = asyncio.get_event_loop().time()
     try:
@@ -837,7 +1316,9 @@ async def api_test_ollama() -> dict[str, Any]:
 
 
 @app.get("/api/test/tiingo")
-async def api_test_tiingo() -> dict[str, Any]:
+@limiter.limit("10/minute")
+async def api_test_tiingo(request: Request,
+                          _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Probe Tiingo (fetch 1 HIGH event)."""
     t0 = asyncio.get_event_loop().time()
     try:
@@ -859,7 +1340,10 @@ async def api_test_tiingo() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.post("/api/notifications/test")
-async def api_notifications_test() -> dict[str, Any]:
+@limiter.limit("5/minute")
+async def api_notifications_test(request: Request,
+                                 _auth: dict = Depends(require_trader)
+                                 ) -> dict[str, Any]:
     """Send a test Telegram message."""
     mgr = get_notification_manager()
     if not mgr.enabled:
@@ -876,7 +1360,10 @@ async def api_notifications_test() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 @app.post("/api/backtest")
-async def api_backtest(req: BacktestRequest) -> dict[str, Any]:
+@limiter.limit("2/hour")
+async def api_backtest(request: Request,
+                       req: BacktestRequest,
+                       _auth: dict = Depends(require_trader)) -> dict[str, Any]:
     """Run a backtest and persist the result."""
     from backtest import BacktestEngine
     engine = BacktestEngine()
@@ -914,7 +1401,10 @@ async def api_backtest(req: BacktestRequest) -> dict[str, Any]:
 
 
 @app.get("/api/backtest/results/{result_id}")
-async def api_backtest_result(result_id: int) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_backtest_result(request: Request,
+                              result_id: int,
+                              _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Retrieve a saved backtest result."""
     row = get_backtest_result(int(result_id))
     if row is None:
@@ -923,19 +1413,79 @@ async def api_backtest_result(result_id: int) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Sprint 7 #15: Monte Carlo + Walk-Forward endpoints
+# --------------------------------------------------------------------------- #
+
+@app.post("/api/backtest/monte-carlo")
+@limiter.limit("5/hour")
+async def api_backtest_monte_carlo(request: Request,
+                                  req: MonteCarloRequest,
+                                  _auth: dict = Depends(require_trader)
+                                  ) -> dict[str, Any]:
+    """Run a Monte-Carlo bootstrap on the last ``trades_period`` days of
+    closed trades."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=req.trades_period)
+    rows = list_trades(limit=5_000, status="closed")
+    trades = [r for r in rows
+              if r.get("close_time")
+              and r["close_time"] >= cutoff.isoformat()]
+    mc = MonteCarloEngine(initial_balance=10_000.0, seed=42)
+    result = mc.run(trades, iterations=req.iterations,
+                    mode=req.mode, noise_std=req.noise_std)
+    return {
+        "iterations": result.iterations,
+        "median_final_balance": result.median_final_balance,
+        "p5_final": result.p5_final,
+        "p95_final": result.p95_final,
+        "median_max_dd_pct": result.median_max_dd_pct,
+        "p95_max_dd_pct": result.p95_max_dd_pct,
+        "survival_rate": result.survival_rate,
+        "median_profit_factor": result.median_profit_factor,
+        "trades_used": len(trades),
+        "trades_period_days": req.trades_period,
+    }
+
+
+@app.post("/api/backtest/walk-forward")
+@limiter.limit("5/hour")
+async def api_backtest_walk_forward(request: Request,
+                                    req: WalkForwardRequest,
+                                    _auth: dict = Depends(require_trader)
+                                    ) -> dict[str, Any]:
+    """Run a rolling walk-forward analysis on closed trades."""
+    rows = list_trades(limit=5_000, status="closed")
+    trades = list(reversed(rows))  # chronological
+    wf = WalkForwardAnalyzer(initial_balance=10_000.0)
+    result = wf.run(trades,
+                    in_sample_window=req.in_sample_window,
+                    out_sample_window=req.out_sample_window)
+    return {
+        "windows": result.windows,
+        "avg_degradation_pct": result.avg_degradation_pct,
+        "trades_used": len(trades),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Audit-fix Sprint 2 #17: Holiday calendar endpoint
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/holidays")
-async def api_holidays(year: int | None = None) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_holidays(request: Request,
+                       year: int | None = None,
+                       _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """List FX market holidays for a given year."""
     from holidays import list_holidays
     return {"year": year, "holidays": list_holidays(year)}
 
 
 @app.get("/api/news")
-async def api_news(impact: str | None = "HIGH",
-                   days_ahead: int = 7) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_news(request: Request,
+                   impact: str | None = "HIGH",
+                   days_ahead: int = 7,
+                   _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Economic calendar from Tiingo (with SQLite cache fallback)."""
     cal = get_calendar()
     try:
@@ -958,7 +1508,10 @@ async def api_news(impact: str | None = "HIGH",
 
 
 @app.post("/api/ai/analyze")
-async def api_ai_analyze(req: AnalyzeRequest) -> dict[str, Any]:
+@limiter.limit("5/minute")
+async def api_ai_analyze(request: Request,
+                         req: AnalyzeRequest,
+                         _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Send a setup to Ollama for compliance analysis."""
     analyzer = get_analyzer()
     available = await analyzer.is_available()
@@ -969,7 +1522,7 @@ async def api_ai_analyze(req: AnalyzeRequest) -> dict[str, Any]:
                    f"is not available at {settings.ollama.base_url}",
         )
     try:
-        result = await analyzer.analyze_setup(req.signal)
+        result = await analyzer.analyze_setup(req.signal.model_dump())
         return {
             "compliant": result.compliant,
             "score": result.score,
@@ -985,7 +1538,10 @@ async def api_ai_analyze(req: AnalyzeRequest) -> dict[str, Any]:
 
 
 @app.post("/api/ai/chat")
-async def api_ai_chat(req: ChatRequest) -> dict[str, Any]:
+@limiter.limit("5/minute")
+async def api_ai_chat(request: Request,
+                      req: ChatRequest,
+                      _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Chat with Ollama (non-streaming JSON response)."""
     analyzer = get_analyzer()
     available = await analyzer.is_available()
@@ -1004,7 +1560,10 @@ async def api_ai_chat(req: ChatRequest) -> dict[str, Any]:
 
 
 @app.get("/api/ai/chat/stream")
-async def api_ai_chat_stream(message: str) -> StreamingResponse:
+@limiter.limit("5/minute")
+async def api_ai_chat_stream(request: Request,
+                             message: str,
+                             _auth: dict = Depends(get_api_key)) -> StreamingResponse:
     """Streaming chat endpoint (Server-Sent Events)."""
     analyzer = get_analyzer()
 
@@ -1022,22 +1581,31 @@ async def api_ai_chat_stream(message: str) -> StreamingResponse:
 
 
 @app.get("/api/journal")
-async def api_journal(limit: int = 100,
+@limiter.limit("60/minute")
+async def api_journal(request: Request,
+                      limit: int = 100,
                       offset: int = 0,
-                      status: str | None = None) -> dict[str, Any]:
+                      status: str | None = None,
+                      _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Trade history from SQLite."""
     rows = list_trades(limit=limit, offset=offset, status=status)
     return {"count": len(rows), "trades": rows}
 
 
 @app.get("/api/settings")
-async def api_get_settings() -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def api_get_settings(request: Request,
+                           _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Get all settings."""
     return {"settings": get_all_settings()}
 
 
 @app.post("/api/settings")
-async def api_update_settings(req: SettingsUpdate) -> dict[str, Any]:
+@limiter.limit("30/minute")
+async def api_update_settings(request: Request,
+                              req: SettingsUpdate,
+                              _auth: dict = Depends(require_trader)
+                              ) -> dict[str, Any]:
     """Update settings (key/value pairs)."""
     for k, v in req.settings.items():
         set_setting(k, v)
@@ -1045,14 +1613,19 @@ async def api_update_settings(req: SettingsUpdate) -> dict[str, Any]:
 
 
 @app.get("/api/chart/{symbol}")
-async def api_chart(symbol: str,
+@limiter.limit("60/minute")
+async def api_chart(request: Request,
+                    symbol: str,
                     timeframe: str = "M5",
-                    count: int = 200) -> dict[str, Any]:
+                    count: int = 200,
+                    _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
     """Candlestick data + indicators (EMA9/21, VWAP, ATR, ADX, RSI)."""
-    mt5_sym = symbol.upper().replace("/", "")
+    # Sprint 5 #8: whitelist validation
+    sym = SymbolValidator.validate(symbol)
+    mt5_sym = sym
     # Allow caller to use pair name OR mt5 symbol
-    if mt5_sym in settings.pairs:
-        mt5_sym = settings.symbol_for(mt5_sym)
+    if sym in settings.pairs:
+        mt5_sym = settings.symbol_for(sym)
     if not MT5_AVAILABLE or not get_connector().connected:
         return {"symbol": symbol, "candles": [], "indicators": {},
                 "mt5_connected": False}
@@ -1123,7 +1696,19 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         {"type": "position_closed", ...}
         {"type": "tick", "symbol": ..., "bid": ..., "ask": ...}
         {"type": "status", ...}
+
+    Sprint 5 #1: WebSocket authentication - if ``API_KEYS`` env is set, the
+    client MUST pass ``?token=<key>`` as a query parameter.  When auth is
+    disabled (dev mode), the connection is accepted unconditionally.
     """
+    # ---- Sprint 5 #1: token-based WS auth ---- #
+    auth = get_auth()
+    if auth.enabled:
+        token = ws.query_params.get("token")
+        ctx = auth.verify_websocket_token(token)
+        if not ctx.get("authenticated"):
+            await ws.close(code=4401)  # custom close code: unauthorized
+            return
     await ws.accept()
     engine = get_engine()
     queue = engine.bus.subscribe()
@@ -1197,6 +1782,313 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         except asyncio.CancelledError:
             pass
         engine.bus.unsubscribe(queue)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 5 #6: auth login + me endpoints
+# --------------------------------------------------------------------------- #
+
+@app.post("/api/auth/login")
+@limiter.limit("10/minute")
+async def api_auth_login(request: Request,
+                         req: LoginRequest) -> dict[str, Any]:
+    """Exchange username + password for an API key (session token).
+
+    The API key is persisted on the user row so subsequent Bearer requests
+    authenticate as that user.  No JWT / NextAuth integration is done here
+    - the frontend may wrap this in its own session cookie if desired.
+    """
+    res = auth_login(req.username, req.password)
+    if not res.ok:
+        raise HTTPException(status_code=401, detail={"ok": False,
+                                                     "message": res.message})
+    return {
+        "ok": True,
+        "api_key": res.api_key,
+        "username": res.username,
+        "role": res.role,
+        "message": res.message,
+    }
+
+
+@app.get("/api/auth/me")
+@limiter.limit("30/minute")
+async def api_auth_me(request: Request,
+                      _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
+    """Return the current user info derived from the API key."""
+    user = _auth.get("user") or {}
+    return {
+        "authenticated": True,
+        "auth_disabled": _auth.get("auth_disabled", False),
+        "user": {
+            "username": user.get("username"),
+            "role": user.get("role", "VIEWER"),
+            "id": user.get("id"),
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 5 #3: secrets CRUD endpoints (admin only)
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/secrets")
+@limiter.limit("30/minute")
+async def api_list_secrets(request: Request,
+                           _auth: dict = Depends(require_admin)
+                           ) -> dict[str, Any]:
+    """List all stored secret names (values are NOT returned)."""
+    sm = get_secret_manager()
+    names = sm.list_secret_names()
+    return {"count": len(names), "names": names,
+            "encryption_enabled": sm.enabled}
+
+
+@app.get("/api/secrets/{name}")
+@limiter.limit("30/minute")
+async def api_get_secret(request: Request,
+                         name: str,
+                         _auth: dict = Depends(require_admin)
+                         ) -> dict[str, Any]:
+    """Return the decrypted value of a stored secret (admin only)."""
+    sm = get_secret_manager()
+    val = sm.get_secret(name)
+    if val is None:
+        raise HTTPException(status_code=404, detail=f"secret '{name}' not found")
+    return {"name": name, "value": val}
+
+
+@app.post("/api/secrets/{name}")
+@limiter.limit("10/minute")
+async def api_store_secret(request: Request,
+                           name: str,
+                           req: SecretStoreRequest,
+                           _auth: dict = Depends(require_admin)
+                           ) -> dict[str, Any]:
+    """Store (encrypt) a secret value under ``name``."""
+    sm = get_secret_manager()
+    sm.store_secret(name, req.value)
+    return {"ok": True, "name": name, "encryption_enabled": sm.enabled}
+
+
+@app.delete("/api/secrets/{name}")
+@limiter.limit("10/minute")
+async def api_delete_secret(request: Request,
+                            name: str,
+                            _auth: dict = Depends(require_admin)
+                            ) -> dict[str, Any]:
+    """Delete a stored secret."""
+    sm = get_secret_manager()
+    deleted = sm.delete_secret(name)
+    return {"ok": deleted, "name": name}
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #11: BAPPEBTI compliance + regulatory status
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/regulatory/bappebti-status")
+@limiter.limit("30/minute")
+async def api_bappebti_status(request: Request,
+                              broker: str | None = None,
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Return BAPPEBTI compliance checklist + broker registration check."""
+    broker_name = broker or settings.mt5.server
+    return check_bappebti_compliance(broker_name)
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 6 #12: trade reconstruction endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/trade/{trade_id}/reconstruct")
+@limiter.limit("30/minute")
+async def api_trade_reconstruct(request: Request,
+                                trade_id: int,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """Return the full tick-level event timeline for a trade."""
+    events = list_trade_events(int(trade_id))
+    return {"count": len(events), "trade_id": int(trade_id), "events": events}
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #13: VaR + CVaR endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/analytics/var")
+@limiter.limit("30/minute")
+async def api_analytics_var(request: Request,
+                            confidence: float = 0.95,
+                            days: int = 30,
+                            _auth: dict = Depends(get_api_key)
+                            ) -> dict[str, Any]:
+    """Return VaR + CVaR for the trailing ``days`` days of trades."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = list_trades(limit=5_000, status="closed")
+    recent = [r for r in rows
+              if r.get("close_time")
+              and r["close_time"] >= cutoff.isoformat()]
+    returns = get_returns_from_trades(recent)
+    var = calculate_var(returns, confidence=confidence, method="historical")
+    cvar = calculate_cvar(returns, confidence=confidence)
+    return {
+        "confidence": confidence,
+        "days": days,
+        "trades_used": len(recent),
+        "var": var,
+        "cvar": cvar,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #14: stress test endpoints
+# --------------------------------------------------------------------------- #
+
+@app.post("/api/analytics/stress-test")
+@limiter.limit("5/hour")
+async def api_analytics_stress_test(request: Request,
+                                    req: StressTestRequest,
+                                    _auth: dict = Depends(require_trader)
+                                    ) -> dict[str, Any]:
+    """Run all 4 stress scenarios on the trailing ``trades_period_days``
+    days of closed trades.  Returns + persists the results."""
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=req.trades_period_days))
+    rows = list_trades(limit=5_000, status="closed")
+    trades = [r for r in rows
+              if r.get("close_time")
+              and r["close_time"] >= cutoff.isoformat()]
+    tester = StressTester()
+    results = tester.run_all_scenarios(trades, req.balance)
+    result_id = insert_stress_test_result(
+        trades_period_days=req.trades_period_days,
+        balance=req.balance,
+        results=results,
+    )
+    return {"id": result_id, "results": results,
+            "trades_used": len(trades)}
+
+
+@app.get("/api/analytics/stress-test/results/{result_id}")
+@limiter.limit("30/minute")
+async def api_stress_test_result(request: Request,
+                                 result_id: int,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Retrieve a saved stress-test result."""
+    row = get_stress_test_result(int(result_id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return row
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #16: Kelly criterion endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/analytics/kelly")
+@limiter.limit("30/minute")
+async def api_analytics_kelly(request: Request,
+                              balance: float = 10_000.0,
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Return Kelly criterion stats from the most recent 200 closed trades."""
+    trades = list_trades(limit=200, status="closed")
+    sizer = KellySizer()
+    res = sizer.calculate_from_history(trades, balance=balance)
+    return {
+        "f_kelly": res.f_kelly,
+        "f_actual": res.f_actual,
+        "risk_pct": res.risk_pct,
+        "recommended_lot": res.recommended_lot,
+        "win_rate": res.win_rate,
+        "avg_win": res.avg_win,
+        "avg_loss": res.avg_loss,
+        "trades_used": len(trades),
+        "mode": cfg.POSITION_SIZING_MODE,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Sprint 7 #17: slippage + latency analytics
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/analytics/slippage")
+@limiter.limit("30/minute")
+async def api_analytics_slippage(request: Request,
+                                 days: int = 30,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Return slippage stats per symbol for the last ``days`` days."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = list_trades(limit=5_000)
+    recent = [r for r in rows
+              if r.get("open_time")
+              and r["open_time"] >= cutoff.isoformat()
+              and r.get("slippage_actual") is not None]
+    # Group by symbol
+    by_symbol: dict[str, list[float]] = {}
+    for r in recent:
+        s = r.get("symbol", "_unknown")
+        by_symbol.setdefault(s, []).append(float(r["slippage_actual"]))
+    out: dict[str, Any] = {}
+    for s, vals in by_symbol.items():
+        vals_sorted = sorted(vals)
+        n = len(vals_sorted)
+        def _pct(p: float) -> float:
+            if n == 0:
+                return 0.0
+            idx = int(p * (n - 1))
+            return vals_sorted[idx]
+        out[s] = {
+            "samples": n,
+            "p50": round(_pct(0.5), 4),
+            "p95": round(_pct(0.95), 4),
+            "p99": round(_pct(0.99), 4),
+            "mean": round(sum(vals) / n, 4),
+        }
+    return {"days": days, "by_symbol": out, "total_samples": len(recent)}
+
+
+@app.get("/api/analytics/latency")
+@limiter.limit("30/minute")
+async def api_analytics_latency(request: Request,
+                                hours: float = 24.0,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """Return latency samples for the last ``hours`` hours."""
+    rows = list_latency_samples(hours=hours)
+    # Compute aggregate percentiles across all endpoints
+    latencies = sorted([r["latency_ms"] for r in rows])
+    n = len(latencies)
+    def _pct(p: float) -> float:
+        if n == 0:
+            return 0.0
+        idx = int(p * (n - 1))
+        return latencies[idx]
+    # Trigger Telegram alert if p95 slippage or p99 latency thresholds breached
+    p99_latency = _pct(0.99)
+    if p99_latency > 100.0:
+        try:
+            mgr = get_notification_manager()
+            if mgr.enabled:
+                await mgr.send_alert(
+                    f"⚠️ Latency p99 = {p99_latency:.1f}ms (>100ms threshold). "
+                    f"Check MT5 connection / broker responsiveness.")
+        except Exception:
+            pass
+    return {
+        "hours": hours,
+        "samples": rows,
+        "aggregate": {
+            "n": n,
+            "p50": round(_pct(0.5), 2),
+            "p95": round(_pct(0.95), 2),
+            "p99": round(p99_latency, 2),
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #
