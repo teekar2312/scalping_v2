@@ -43,7 +43,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
@@ -1400,7 +1400,7 @@ async def api_backup_offsite(request: Request,
                      403: {"description": "Admin role required"}})
 @limiter.limit("2/minute")
 async def api_restore(request: Request,
-                      file: UploadFile,
+                      file: UploadFile = File(...),
                       _auth: dict = Depends(require_admin)) -> dict[str, Any]:
     """Restore the SQLite DB from an uploaded backup file."""
     db_path = Path(settings.paths.db_path)
