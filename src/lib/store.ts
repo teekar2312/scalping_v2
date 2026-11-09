@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { DensityMode } from './constants';
-import type { Settings } from './types';
+import type { Settings, BotMode, Signal, Trade, TickPrice } from './types';
 
 interface AppStore {
   // Display
@@ -20,6 +20,8 @@ interface AppStore {
     | 'ai'
     | 'news'
     | 'strategy'
+    | 'backtest'
+    | 'audit'
     | 'settings';
   setActiveView: (v: AppStore['activeView']) => void;
 
@@ -34,6 +36,59 @@ interface AppStore {
   // Kill switch confirmation modal
   killSwitchOpen: boolean;
   setKillSwitchOpen: (open: boolean) => void;
+
+  // --- New state for audit-fix backend endpoints --- //
+
+  /** Bot execution mode (LIVE / PAPER / DRY). */
+  botMode: BotMode;
+  setBotMode: (m: BotMode) => void;
+
+  /** Dry-run toggle (generate signals without execution). */
+  dryRun: boolean;
+  setDryRun: (v: boolean) => void;
+
+  /** Paper-mode flag (separate from dry-run). */
+  paperMode: boolean;
+  setPaperMode: (v: boolean) => void;
+
+  /** Active cooldown (set by WebSocket `cooldown_engaged` events). */
+  cooldownActive: boolean;
+  cooldownUntil: string | null;
+  cooldownReason: string | null;
+  setCooldown: (active: boolean, until?: string | null, reason?: string | null) => void;
+
+  /** Streak status (consecutive wins / losses, set by backend `status` push). */
+  consecutiveLosses: number;
+  consecutiveWins: number;
+
+  /** Live prices pushed by WebSocket `tick` events. */
+  livePrices: Record<string, TickPrice>;
+  updateLivePrice: (symbol: string, price: TickPrice) => void;
+
+  /** Open positions updated by WebSocket order_placed / position_closed events. */
+  realtimeTrades: Trade[];
+  onTradeUpdate: (trade: Trade) => void;
+  onPositionClosed: (ticket: number) => void;
+
+  /** Latest signals (pushed by `signal` events). */
+  realtimeSignals: Signal[];
+  onSignalUpdate: (signal: Signal) => void;
+
+  /** Counter that bumps when an audit-log-relevant event arrives (so AuditLogView can refresh). */
+  auditLogRefresh: number;
+  bumpAuditLog: () => void;
+
+  /** Margin level warning flag (set by `margin_warning`). */
+  marginWarning: number | null;
+  setMarginWarning: (level: number | null) => void;
+
+  /** WebSocket connection state. */
+  wsConnected: boolean;
+  wsConnecting: boolean;
+  setWsState: (connected: boolean, connecting: boolean) => void;
+
+  /** Reset realtime transient state (used when disconnecting). */
+  resetRealtime: () => void;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -82,6 +137,77 @@ export const useAppStore = create<AppStore>()(
 
       killSwitchOpen: false,
       setKillSwitchOpen: (open) => set({ killSwitchOpen: open }),
+
+      // --- New realtime state --- //
+      botMode: 'PAPER',
+      setBotMode: (m) => set({ botMode: m }),
+
+      dryRun: false,
+      setDryRun: (v) => set({ dryRun: v }),
+
+      paperMode: true,
+      setPaperMode: (v) => set({ paperMode: v }),
+
+      cooldownActive: false,
+      cooldownUntil: null,
+      cooldownReason: null,
+      setCooldown: (active, until = null, reason = null) =>
+        set({ cooldownActive: active, cooldownUntil: until, cooldownReason: reason }),
+
+      consecutiveLosses: 0,
+      consecutiveWins: 0,
+
+      livePrices: {},
+      updateLivePrice: (symbol, price) =>
+        set((state) => ({
+          livePrices: { ...state.livePrices, [symbol]: price },
+        })),
+
+      realtimeTrades: [],
+      onTradeUpdate: (trade) =>
+        set((state) => {
+          const existing = state.realtimeTrades.findIndex((t) => t.id === trade.id);
+          if (existing >= 0) {
+            const next = [...state.realtimeTrades];
+            next[existing] = trade;
+            return { realtimeTrades: next };
+          }
+          return { realtimeTrades: [trade, ...state.realtimeTrades].slice(0, 20) };
+        }),
+      onPositionClosed: (ticket) =>
+        set((state) => ({
+          realtimeTrades: state.realtimeTrades.filter((t) => t.ticket !== ticket),
+        })),
+
+      realtimeSignals: [],
+      onSignalUpdate: (signal) =>
+        set((state) => ({
+          realtimeSignals: [signal, ...state.realtimeSignals].slice(0, 20),
+        })),
+
+      auditLogRefresh: 0,
+      bumpAuditLog: () => set((state) => ({ auditLogRefresh: state.auditLogRefresh + 1 })),
+
+      marginWarning: null,
+      setMarginWarning: (level) => set({ marginWarning: level }),
+
+      wsConnected: false,
+      wsConnecting: false,
+      setWsState: (connected, connecting) =>
+        set({ wsConnected: connected, wsConnecting: connecting }),
+
+      resetRealtime: () =>
+        set({
+          livePrices: {},
+          realtimeTrades: [],
+          realtimeSignals: [],
+          cooldownActive: false,
+          cooldownUntil: null,
+          cooldownReason: null,
+          marginWarning: null,
+          wsConnected: false,
+          wsConnecting: false,
+        }),
     }),
     {
       name: 'forex-scalping-v2-store',
@@ -89,6 +215,9 @@ export const useAppStore = create<AppStore>()(
         density: state.density,
         settings: state.settings,
         activeSymbol: state.activeSymbol,
+        botMode: state.botMode,
+        dryRun: state.dryRun,
+        paperMode: state.paperMode,
       }),
     }
   )

@@ -214,6 +214,40 @@ class TiingoCalendar:
                     out.add(ccy)
         return out
 
+    async def get_upcoming_high_news(self,
+                                     minutes_ahead: int = 30,
+                                     now: datetime | None = None
+                                     ) -> list[dict[str, Any]]:
+        """Return HIGH-impact events firing within the next ``minutes_ahead``.
+
+        Used by the trading engine's pre-news position reduction logic.
+        """
+        if now is None:
+            now = datetime.now(timezone.utc)
+        events = await self.fetch_calendar(impact="HIGH")
+        window = timedelta(minutes=minutes_ahead)
+        upcoming: list[dict[str, Any]] = []
+        for ev in events:
+            et = ev.get("event_time")
+            if isinstance(et, str):
+                try:
+                    et = datetime.fromisoformat(et.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if et is None or et.tzinfo is None:
+                continue
+            delta = et - now
+            if timedelta(0) <= delta <= window:
+                upcoming.append({
+                    "symbol": ev.get("symbol"),
+                    "title": ev.get("title"),
+                    "event_time": et.isoformat(),
+                    "minutes_until": int(delta.total_seconds() // 60),
+                    "country": ev.get("country"),
+                })
+        upcoming.sort(key=lambda e: e["minutes_until"])
+        return upcoming
+
     # ---- Sync wrapper ------------------------------------------------------ #
 
     def fetch_calendar_sync(self, days_ahead: int = 7,

@@ -12,6 +12,27 @@ import type {
   Settings,
   SystemStatus,
   Trade,
+  AuditLogEntry,
+  AuditLogResponse,
+  EquityCurvePoint,
+  EquityCurveResponse,
+  PerformanceAttribution,
+  ComplianceScore,
+  PreLiveCheck,
+  BacktestRequest,
+  BacktestResult,
+  HolidaysResponse,
+  BotModeState,
+  BotMode,
+  EmotionalSummaryResponse,
+  EmotionalState,
+  LogEmotionRequest,
+  TimeSyncResponse,
+  RestoreResponse,
+  RiskDisclosureResponse,
+  ServiceTestResult,
+  WSEvent,
+  WSEventType,
 } from './types';
 import {
   getDemoAccount,
@@ -23,6 +44,18 @@ import {
   getDemoSignals,
   getDemoSystemStatus,
   getDemoTradeHistory,
+  getDemoAuditLog,
+  getDemoEquityCurve,
+  getDemoPerformanceAttribution,
+  getDemoComplianceScore,
+  getDemoPreLiveCheck,
+  getDemoTimeSync,
+  getDemoRiskDisclosure,
+  getDemoEmotionalSummary,
+  getDemoBacktestResult,
+  getDemoHolidays,
+  getDemoBotMode,
+  getDemoServiceTest,
 } from './mock-data';
 
 // In demo mode (sandbox), use Next.js API routes that return mock data
@@ -59,7 +92,7 @@ export async function getAccount(): Promise<Account> {
 
 export async function getBotState(): Promise<BotState> {
   if (IS_DEMO) return getDemoBotState();
-  return fetchAPI<BotState>('/api/status').then((s) => s.bot);
+  return fetchAPI<SystemStatus>('/api/status').then((s) => s.bot);
 }
 
 export async function getOpenTrades(): Promise<Trade[]> {
@@ -158,8 +191,476 @@ export async function saveSettings(settings: Settings): Promise<{ success: boole
   });
 }
 
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 1 #10: Audit log
+// --------------------------------------------------------------------------- //
+
+export interface AuditLogFilters {
+  event_type?: string;
+  severity?: string;
+  limit?: number;
+  offset?: number;
+  start?: string;
+  end?: string;
+}
+
+export async function getAuditLog(filters: AuditLogFilters = {}): Promise<AuditLogEntry[]> {
+  if (IS_DEMO) {
+    let rows = getDemoAuditLog(filters.limit ?? 100);
+    if (filters.event_type) rows = rows.filter((r) => r.event_type === filters.event_type);
+    if (filters.severity) rows = rows.filter((r) => r.severity === filters.severity);
+    return rows.slice(0, filters.limit ?? 100);
+  }
+  const params = new URLSearchParams();
+  if (filters.event_type) params.set('event_type', filters.event_type);
+  if (filters.severity) params.set('severity', filters.severity);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  if (filters.offset) params.set('offset', String(filters.offset));
+  if (filters.start) params.set('start', filters.start);
+  if (filters.end) params.set('end', filters.end);
+  const res = await fetchAPI<AuditLogResponse>(`/api/audit-log?${params.toString()}`);
+  return res.events;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 3 #19: Equity curve
+// --------------------------------------------------------------------------- //
+
+export async function getEquityCurve(hours = 24): Promise<EquityCurvePoint[]> {
+  if (IS_DEMO) return getDemoEquityCurve(hours);
+  const res = await fetchAPI<EquityCurveResponse>(`/api/equity-curve?hours=${hours}`);
+  return res.samples;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 3 #20-21: Performance attribution + compliance
+// --------------------------------------------------------------------------- //
+
+export async function getPerformanceAttribution(start?: string, end?: string): Promise<PerformanceAttribution> {
+  if (IS_DEMO) return getDemoPerformanceAttribution();
+  const params = new URLSearchParams();
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  return fetchAPI<PerformanceAttribution>(`/api/analytics/attribution?${params.toString()}`);
+}
+
+export async function getComplianceScore(start?: string, end?: string): Promise<ComplianceScore> {
+  if (IS_DEMO) return getDemoComplianceScore();
+  const params = new URLSearchParams();
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  return fetchAPI<ComplianceScore>(`/api/analytics/compliance?${params.toString()}`);
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 3 #22: Emotional-state logging
+// --------------------------------------------------------------------------- //
+
+export async function getEmotionalSummary(limit = 200): Promise<EmotionalSummaryResponse> {
+  if (IS_DEMO) return getDemoEmotionalSummary();
+  return fetchAPI<EmotionalSummaryResponse>(`/api/analytics/emotions?limit=${limit}`);
+}
+
+export async function logEmotion(
+  tradeId: number,
+  state: EmotionalState,
+  note?: string,
+): Promise<{ ok: boolean; trade_id: number; state: string }> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 300));
+    return { ok: true, trade_id: tradeId, state };
+  }
+  const body: LogEmotionRequest = { state, note };
+  return fetchAPI(`/api/trade/${tradeId}/emotion`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #15: Pre-live checklist + Sprint 4 #27 time-sync
+// --------------------------------------------------------------------------- //
+
+export async function getPreLiveCheck(): Promise<PreLiveCheck> {
+  if (IS_DEMO) return getDemoPreLiveCheck();
+  return fetchAPI<PreLiveCheck>('/api/pre-live-check');
+}
+
+export async function getTimeSync(): Promise<TimeSyncResponse> {
+  if (IS_DEMO) return getDemoTimeSync();
+  return fetchAPI<TimeSyncResponse>('/api/time-sync');
+}
+
+export async function getRiskDisclosure(): Promise<RiskDisclosureResponse> {
+  if (IS_DEMO) return getDemoRiskDisclosure();
+  return fetchAPI<RiskDisclosureResponse>('/api/risk-disclosure');
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 4 #29-30: Real probes (test buttons)
+// --------------------------------------------------------------------------- //
+
+export async function testMT5(): Promise<ServiceTestResult> {
+  if (IS_DEMO) return getDemoServiceTest('mt5');
+  return fetchAPI<ServiceTestResult>('/api/test/mt5');
+}
+
+export async function testOllama(): Promise<ServiceTestResult> {
+  if (IS_DEMO) return getDemoServiceTest('ollama');
+  return fetchAPI<ServiceTestResult>('/api/test/ollama');
+}
+
+export async function testTiingo(): Promise<ServiceTestResult> {
+  if (IS_DEMO) return getDemoServiceTest('tiingo');
+  return fetchAPI<ServiceTestResult>('/api/test/tiingo');
+}
+
+export async function testTelegram(): Promise<{ ok: boolean; message: string }> {
+  if (IS_DEMO) return getDemoServiceTest('telegram');
+  return fetchAPI<{ ok: boolean; message: string }>('/api/notifications/test', { method: 'POST' });
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #11: Backtest
+// --------------------------------------------------------------------------- //
+
+export async function runBacktest(req: BacktestRequest): Promise<BacktestResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 800));
+    return getDemoBacktestResult(req);
+  }
+  return fetchAPI<BacktestResult>('/api/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+}
+
+export async function getBacktestResult(id: number): Promise<BacktestResult> {
+  if (IS_DEMO) {
+    return getDemoBacktestResult({
+      symbol: 'EURUSD',
+      timeframe: 'M5',
+      start_date: new Date(Date.now() - 90 * 86400_000).toISOString().split('T')[0],
+      end_date: new Date().toISOString().split('T')[0],
+      initial_balance: 10000,
+    });
+  }
+  return fetchAPI<BacktestResult>(`/api/backtest/results/${id}`);
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #17: Holidays + Sprint 2 #12 bot mode
+// --------------------------------------------------------------------------- //
+
+export async function getHolidays(year?: number): Promise<HolidaysResponse> {
+  if (IS_DEMO) {
+    return { year: year ?? 2026, holidays: getDemoHolidays(year ?? 2026) };
+  }
+  const q = year ? `?year=${year}` : '';
+  return fetchAPI<HolidaysResponse>(`/api/holidays${q}`);
+}
+
+export async function getBotMode(): Promise<BotModeState> {
+  if (IS_DEMO) return getDemoBotMode();
+  return fetchAPI<BotModeState>('/api/bot/mode');
+}
+
+export async function setBotMode(mode: BotMode): Promise<BotModeState> {
+  if (IS_DEMO) {
+    const isPaper = mode === 'PAPER';
+    const isDry = mode === 'DRY';
+    return { mode: mode.toLowerCase(), paper_mode: isPaper, dry_run: isDry };
+  }
+  return fetchAPI<BotModeState>('/api/bot/mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+}
+
+export async function setDryRun(enabled: boolean): Promise<BotModeState> {
+  if (IS_DEMO) {
+    return { mode: enabled ? 'dry' : 'paper', paper_mode: !enabled, dry_run: enabled };
+  }
+  return fetchAPI<BotModeState>('/api/bot/dry-run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 4 #24-26: Backup / restore / PDF / tax exports
+// --------------------------------------------------------------------------- //
+
+function buildPythonUrl(path: string): string {
+  return `${PYTHON_API}${path}`;
+}
+
+export async function downloadBackup(): Promise<Blob> {
+  if (IS_DEMO) {
+    // Generate a fake SQLite-style blob (JSON dump of demo data) for demo mode
+    const payload = {
+      exported_at: new Date().toISOString(),
+      demo_mode: true,
+      trades: getDemoTradeHistory(30),
+      audit_log: getDemoAuditLog(50),
+      equity_curve: getDemoEquityCurve(24),
+    };
+    return new Blob([JSON.stringify(payload, null, 2)], { type: 'application/octet-stream' });
+  }
+  const res = await fetch(buildPythonUrl('/api/backup'));
+  if (!res.ok) throw new Error(`backup failed: ${res.status}`);
+  return res.blob();
+}
+
+export async function restoreBackup(file: File): Promise<RestoreResponse> {
+  if (IS_DEMO) {
+    return {
+      ok: true,
+      restored_to: 'demo://memory.db',
+      size_bytes: file.size,
+    };
+  }
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(buildPythonUrl('/api/restore'), { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`restore failed: ${res.status}`);
+  return res.json();
+}
+
+export async function downloadPDF(weekStart: string): Promise<Blob> {
+  if (IS_DEMO) {
+    // Demo: return a simple text PDF-like blob
+    const text = `WEEKLY JOURNAL — Week of ${weekStart}\n\nGenerated from demo data.\n\nThis is a placeholder PDF in demo mode.`;
+    return new Blob([text], { type: 'application/pdf' });
+  }
+  const res = await fetch(buildPythonUrl(`/api/export/pdf?week_start=${encodeURIComponent(weekStart)}`));
+  if (!res.ok) throw new Error(`PDF export failed: ${res.status}`);
+  return res.blob();
+}
+
+export async function downloadTax(year: number): Promise<Blob> {
+  if (IS_DEMO) {
+    const trades = getDemoTradeHistory(30).filter(
+      (t) => t.closeTime && t.closeTime.startsWith(String(year)),
+    );
+    const header = 'ticket,symbol,direction,volume,open_time,close_time,open_price,close_price,profit,commission,swap,net_profit,pnl_currency\n';
+    const rows = trades.map((t) =>
+      [
+        t.ticket,
+        t.symbol,
+        t.direction,
+        t.volume,
+        t.entryTime,
+        t.closeTime,
+        t.openPrice,
+        t.closePrice,
+        t.profitNet ?? 0,
+        0,
+        0,
+        t.profitNet ?? 0,
+        'USD',
+      ].join(','),
+    );
+    return new Blob([header + rows.join('\n')], { type: 'text/csv' });
+  }
+  const res = await fetch(buildPythonUrl(`/api/export/tax?year=${year}`));
+  if (!res.ok) throw new Error(`tax CSV failed: ${res.status}`);
+  return res.blob();
+}
+
+// Helper to trigger a browser download from a Blob
+export function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoke shortly after to release memory
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// --------------------------------------------------------------------------- //
+// WebSocket client (Sprint WS — `/ws`)
+// --------------------------------------------------------------------------- //
+
+type EventCallback<T = unknown> = (event: WSEvent<T>) => void;
+
+class WebSocketClient {
+  private socket: WebSocket | null = null;
+  private url: string | null = null;
+  private listeners = new Map<WSEventType | '*', Set<EventCallback>>();
+  private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private shouldReconnect = true;
+  private connectionState: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' = 'disconnected';
+  private stateListeners = new Set<(state: WebSocketClient['connectionState']) => void>();
+
+  get state(): WebSocketClient['connectionState'] {
+    return this.connectionState;
+  }
+
+  /** Returns the WebSocket URL derived from NEXT_PUBLIC_PYTHON_API_URL. */
+  private resolveUrl(): string {
+    if (typeof window === 'undefined') return '';
+    const api = process.env.NEXT_PUBLIC_PYTHON_API_URL || '';
+    if (!api) return '';
+    // Convert http(s)://host -> ws(s)://host
+    const wsUrl = api.replace(/^http/, 'ws');
+    return `${wsUrl.replace(/\/$/, '')}/ws`;
+  }
+
+  /** Subscribe to either a specific event type or all events ('*'). */
+  subscribe<T = unknown>(eventType: WSEventType | '*', callback: EventCallback<T>): () => void {
+    if (!this.listeners.has(eventType)) this.listeners.set(eventType, new Set());
+    this.listeners.get(eventType)!.add(callback as EventCallback);
+    return () => {
+      this.listeners.get(eventType)?.delete(callback as EventCallback);
+    };
+  }
+
+  /** Subscribe to connection-state changes. */
+  onStateChange(listener: (state: WebSocketClient['connectionState']) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  private setState(s: WebSocketClient['connectionState']) {
+    if (this.connectionState === s) return;
+    this.connectionState = s;
+    this.stateListeners.forEach((l) => l(s));
+  }
+
+  /** Open the WebSocket connection (no-op if already open or in demo mode). */
+  connect(): void {
+    if (typeof window === 'undefined') return;
+    if (IS_DEMO) {
+      this.setState('disconnected');
+      return;
+    }
+    const url = this.resolveUrl();
+    if (!url) {
+      this.setState('disconnected');
+      return;
+    }
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    this.url = url;
+    this.setState(this.reconnectAttempts === 0 ? 'connecting' : 'reconnecting');
+    try {
+      this.socket = new WebSocket(url);
+    } catch (e) {
+      console.warn('WebSocket connect failed:', e);
+      this.scheduleReconnect();
+      return;
+    }
+
+    this.socket.onopen = () => {
+      this.reconnectAttempts = 0;
+      this.setState('connected');
+    };
+
+    this.socket.onmessage = (ev: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(ev.data) as WSEvent;
+        if (!payload || !payload.type) return;
+        this.dispatch(payload);
+      } catch {
+        // ignore malformed JSON
+      }
+    };
+
+    this.socket.onerror = () => {
+      // Errors are followed by onclose, which triggers reconnect.
+    };
+
+    this.socket.onclose = () => {
+      this.socket = null;
+      if (this.shouldReconnect) {
+        this.scheduleReconnect();
+      } else {
+        this.setState('disconnected');
+      }
+    };
+  }
+
+  private dispatch(event: WSEvent): void {
+    const specific = this.listeners.get(event.type);
+    specific?.forEach((cb) => {
+      try {
+        cb(event);
+      } catch (e) {
+        console.warn('WS listener error:', e);
+      }
+    });
+    const wildcard = this.listeners.get('*');
+    wildcard?.forEach((cb) => {
+      try {
+        cb(event);
+      } catch (e) {
+        console.warn('WS wildcard listener error:', e);
+      }
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectAttempts >= 5) {
+      this.setState('disconnected');
+      return;
+    }
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s (max ~30s)
+    const delay = Math.min(30000, 1000 * 2 ** this.reconnectAttempts);
+    this.reconnectAttempts += 1;
+    this.setState('reconnecting');
+    this.reconnectTimer = setTimeout(() => this.connect(), delay);
+  }
+
+  /** Send a message to the server (action: ping/subscribe/chart). */
+  send(message: Record<string, unknown>): void {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      try {
+        this.socket.send(JSON.stringify(message));
+      } catch (e) {
+        console.warn('WS send failed:', e);
+      }
+    }
+  }
+
+  /** Close the connection and disable auto-reconnect. */
+  disconnect(): void {
+    this.shouldReconnect = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.socket) {
+      try {
+        this.socket.close();
+      } catch {
+        // ignore
+      }
+      this.socket = null;
+    }
+    this.setState('disconnected');
+  }
+
+  /** Reset the auto-reconnect flag (used when re-enabling after disconnect). */
+  enableAutoReconnect(): void {
+    this.shouldReconnect = true;
+  }
+}
+
+export const wsClient = new WebSocketClient();
+
 // Demo AI response generator (only used in sandbox)
-function generateDemoAIResponse(userText: string, context?: string): string {
+function generateDemoAIResponse(userText: string, _context?: string): string {
   const text = userText.toLowerCase();
 
   if (text.includes('adx') || text.includes('regime')) {

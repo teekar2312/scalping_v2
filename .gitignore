@@ -90,3 +90,6 @@ Desktop.ini
 *.swp
 *.swo
 *~
+
+# Tool results (sandbox artifacts)
+/tool-results/

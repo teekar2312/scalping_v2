@@ -12,11 +12,30 @@ import type {
   Trade,
   ChecklistResult,
   SystemStatus,
+  AuditLogEntry,
+  EquityCurvePoint,
+  PerformanceAttribution,
+  SessionStats,
+  ComplianceScore,
+  PreLiveCheck,
+  BacktestRequest,
+  BacktestResult,
+  BacktestTrade,
+  StreakStatus,
+  HolidayEntry,
+  BotModeState,
+  EmotionalSummaryResponse,
+  TimeSyncResponse,
+  RiskDisclosureResponse,
+  ServiceTestResult,
+  SetupType,
+  SessionName,
 } from './types';
 import {
   PRE_TRADE_CHECKLIST,
   TRADING_PAIRS,
   V2_RULES,
+  AUDIT_EVENT_TYPES,
 } from './constants';
 
 let seed = 42;
@@ -117,8 +136,8 @@ function generateChecklist(allPass = true): ChecklistResult[] {
   }));
 }
 
-const SETUP_TYPES = ['VWAP_BOUNCE', 'EMA_CROSS', 'PIN_BAR', 'ENGULFING', 'INSIDE_BAR'] as const;
-const SESSIONS = ['TOKYO', 'LONDON', 'OVERLAP'] as const;
+const SETUP_TYPES: SetupType[] = ['VWAP_BOUNCE', 'EMA_CROSS', 'PIN_BAR', 'ENGULFING', 'INSIDE_BAR'];
+const SESSIONS: SessionName[] = ['TOKYO', 'LONDON', 'OVERLAP'];
 
 export function getDemoOpenTrades(): Trade[] {
   const trades: Trade[] = [];
@@ -563,3 +582,373 @@ function calcBollinger(closes: number[], period: number, std: number) {
   }
   return { upper, middle, lower };
 }
+
+// --------------------------------------------------------------------------- //
+// Demo generators for the 30 audit-fix endpoints
+// --------------------------------------------------------------------------- //
+
+export function getDemoAuditLog(limit = 50): AuditLogEntry[] {
+  const entries: AuditLogEntry[] = [];
+  const severities = ['INFO', 'WARN', 'ERROR', 'CRITICAL'] as const;
+  const symbols = ['EURUSD', 'GBPUSD', 'USDJPY', null];
+  const detailTemplates: Record<string, Record<string, unknown>> = {
+    SIGNAL: { direction: 'BUY', setup_type: 'VWAP_BOUNCE', adx: 28.3, rr_net: 2.15 },
+    ORDER_PLACED: { volume: 0.1, sl_pips: 14.5, tp1_pips: 29.0 },
+    TP1_HIT: { partial_close_pct: 0.5, profit_usd: 14.50 },
+    TP2_HIT: { full_close: true, profit_usd: 38.20 },
+    SL_HIT: { sl_pips: 14.5, loss_usd: -14.50 },
+    KILL_SWITCH: { reason: 'manual_trigger', positions_closed: 2 },
+    RISK_GATE_BLOCKED: { reason: 'rr_net_below_min', rr_net: 1.82 },
+    AI_REJECTED: { model: 'llama3.2:latest', confidence: 0.42 },
+    CONNECTION_LOST: { source: 'mt5', retry_in_s: 5 },
+    RECOVERY: { service: 'mt5', latency_ms: 142 },
+    COOLDOWN_ENGAGED: { until_minutes: 30, consecutive_losses: 2 },
+    MARGIN_WARNING: { margin_level_pct: 145 },
+  };
+
+  for (let i = 0; i < limit; i++) {
+    const eventDef = AUDIT_EVENT_TYPES[i % AUDIT_EVENT_TYPES.length];
+    const eventType = eventDef.value;
+    const sevIndex = eventType === 'KILL_SWITCH' || eventType === 'CONNECTION_LOST' || eventType === 'SL_HIT'
+      ? (i % 2 === 0 ? 2 : 3)
+      : eventType === 'MARGIN_WARNING' || eventType === 'RISK_GATE_BLOCKED' || eventType === 'AI_REJECTED' || eventType === 'COOLDOWN_ENGAGED'
+      ? (i % 2 === 0 ? 1 : 2)
+      : 0;
+    const sev = severities[sevIndex];
+    const symbol = symbols[i % symbols.length];
+    const ticket = eventType === 'SIGNAL' || eventType === 'ORDER_PLACED' ? null : 50470000 + i;
+
+    entries.push({
+      id: 1000 + i,
+      timestamp: new Date(Date.now() - i * randFloat(15, 240) * 1000).toISOString(),
+      event_type: eventType,
+      symbol: symbol ?? undefined,
+      ticket: ticket ?? undefined,
+      detail_json: JSON.stringify(detailTemplates[eventType] ?? {}),
+      severity: sev,
+    });
+  }
+  return entries.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
+export function getDemoEquityCurve(hours = 24): EquityCurvePoint[] {
+  const samples: EquityCurvePoint[] = [];
+  const totalMin = Math.max(60, hours * 60);
+  const stepMin = 5;
+  const n = Math.floor(totalMin / stepMin);
+  const startBalance = 10000;
+  let balance = startBalance;
+  let peak = startBalance;
+  let dailyOpen = startBalance;
+
+  for (let i = 0; i < n; i++) {
+    const ts = new Date(Date.now() - (n - i) * stepMin * 60 * 1000);
+    // Random walk with small upward drift during London/Overlap sessions
+    const hourWIB = (ts.getUTCHours() + 7) % 24;
+    const inSession = (hourWIB >= 14 && hourWIB < 17) || (hourWIB >= 20 && hourWIB < 23);
+    const drift = inSession ? 0.6 : -0.1;
+    const noise = (rand() - 0.5) * 18;
+    balance += drift + noise;
+    if (balance > peak) peak = balance;
+    const floating = randFloat(-35, 55);
+    const equity = balance + floating;
+    const drawdownPct = ((balance - peak) / peak) * 100;
+    const dailyPct = ((balance - dailyOpen) / dailyOpen) * 100;
+    if (ts.getUTCHours() === 0 && ts.getUTCMinutes() < stepMin) {
+      dailyOpen = balance;
+    }
+    samples.push({
+      id: i + 1,
+      timestamp: ts.toISOString(),
+      balance: parseFloat(balance.toFixed(2)),
+      equity: parseFloat(equity.toFixed(2)),
+      floating_pnl: parseFloat(floating.toFixed(2)),
+      daily_pnl_pct: parseFloat(dailyPct.toFixed(4)),
+      drawdown_pct: parseFloat(drawdownPct.toFixed(4)),
+      peak_equity: parseFloat(peak.toFixed(2)),
+    });
+  }
+  return samples;
+}
+
+function buildSessionStats(tradeCount: number, baseWinRate: number, baseR: number, baseProfit: number): SessionStats {
+  const trades = tradeCount;
+  const wins = Math.round((baseWinRate / 100) * trades);
+  const losses = trades - wins;
+  return {
+    trades,
+    wins,
+    losses,
+    win_rate: parseFloat(((wins / trades) * 100).toFixed(1)),
+    r_net: parseFloat((baseR * trades).toFixed(2)),
+    profit: parseFloat((baseProfit * trades).toFixed(2)),
+  };
+}
+
+export function getDemoPerformanceAttribution(): PerformanceAttribution {
+  return {
+    by_session: {
+      TOKYO: buildSessionStats(8, 38, -0.05, -4.20),
+      LONDON: buildSessionStats(18, 56, 0.28, 42.50),
+      OVERLAP: buildSessionStats(15, 60, 0.35, 51.30),
+      SYDNEY: buildSessionStats(3, 33, -0.12, -10.10),
+      LONDON_LUNCH: buildSessionStats(2, 50, 0.0, 0.0),
+    },
+    by_setup: {
+      VWAP_BOUNCE: buildSessionStats(16, 56, 0.32, 41.20),
+      EMA_CROSS: buildSessionStats(12, 42, 0.05, 6.00),
+      PIN_BAR: buildSessionStats(8, 50, 0.18, 14.40),
+      ENGULFING: buildSessionStats(7, 57, 0.25, 17.50),
+      INSIDE_BAR: buildSessionStats(3, 33, -0.10, -3.00),
+    },
+    by_regime: {
+      TRENDING: buildSessionStats(28, 61, 0.34, 78.40),
+      TRANSITION: buildSessionStats(12, 42, 0.02, 2.40),
+      RANGING: buildSessionStats(6, 17, -0.42, -25.20),
+      EXHAUSTION: buildSessionStats(1, 0, -1.0, -10.00),
+    },
+    by_hour: {
+      '09': buildSessionStats(3, 33, -0.05, -1.50),
+      '10': buildSessionStats(4, 50, 0.10, 4.00),
+      '14': buildSessionStats(7, 57, 0.25, 17.50),
+      '15': buildSessionStats(8, 62, 0.35, 28.00),
+      '16': buildSessionStats(6, 50, 0.12, 7.20),
+      '20': buildSessionStats(9, 56, 0.30, 27.00),
+      '21': buildSessionStats(7, 57, 0.28, 19.60),
+    },
+    by_day: {
+      MON: buildSessionStats(8, 38, -0.08, -6.40),
+      TUE: buildSessionStats(10, 60, 0.30, 30.00),
+      WED: buildSessionStats(9, 56, 0.22, 19.80),
+      THU: buildSessionStats(11, 55, 0.25, 27.50),
+      FRI: buildSessionStats(9, 44, 0.04, 3.60),
+    },
+    by_pair: {
+      EURUSD: buildSessionStats(22, 55, 0.22, 48.40),
+      GBPUSD: buildSessionStats(14, 50, 0.18, 25.20),
+      USDJPY: buildSessionStats(11, 45, 0.10, 11.00),
+    },
+  };
+}
+
+export function getDemoComplianceScore(): ComplianceScore {
+  return {
+    overall_pct: 87,
+    checklist_pass_rate: 92,
+    rr_compliance_rate: 85,
+    ai_compliance_rate: 88,
+    total_trades: 47,
+  };
+}
+
+export function getDemoPreLiveCheck(): PreLiveCheck {
+  return {
+    mt5: { ok: true, login: 50384721, server: 'FinexIC-Markets', balance: 10000 },
+    ollama: { ok: true, model: 'llama3.2:latest', url: 'http://localhost:11434' },
+    tiingo: { ok: true, events_cached: 8 },
+    config: { ok: true, warnings: [] },
+    db: { ok: true, trade_count: 47 },
+    time_sync: { ok: true, drift_seconds: 0.12 },
+    overall_ready: true,
+    blocking_issues: [],
+  };
+}
+
+export function getDemoTimeSync(): TimeSyncResponse {
+  return {
+    server_time: new Date().toISOString(),
+    ntp_time: new Date().toISOString(),
+    drift_seconds: 0.12,
+    ok: true,
+  };
+}
+
+export function getDemoRiskDisclosure(): RiskDisclosureResponse {
+  return {
+    text: `RISK DISCLOSURE — Forex Scalping V2 Strategy
+
+Trading FX/CFD on margin carries a high level of risk and may not be suitable for all investors. The V2 strategy targets RR Net >= 2.0 with 1% risk per trade, max 3 simultaneous positions, and max 5 trades per day. Past performance (backtests) is NOT indicative of future results. Slippage, spread widening around news, broker rejections, and connectivity losses can cause realised losses to exceed the theoretical 1% risk per trade.
+
+By enabling auto-trading you acknowledge that:
+  1. You are the account holder and are responsible for all activity.
+  2. You have tested the bot in PAPER mode before going LIVE.
+  3. You understand the kill-switch and tiered stop logic (-1%/-2%/-4%/-10%).
+  4. The software is provided "AS IS" without warranty of any kind.
+
+If you do not understand these risks, do not enable auto-trading.`,
+  };
+}
+
+export function getDemoEmotionalSummary(): EmotionalSummaryResponse {
+  const trades = getDemoTradeHistory(20).slice(0, 12);
+  const states = ['SABAR', 'SABAR', 'SABAR', 'SABAR', 'SABAR', 'FOMO', 'FOMO', 'FRUSTRASI', 'FRUSTRASI', 'OVERCONFIDENT', 'SABAR', 'SABAR'];
+  const byState: Record<string, number> = { SABAR: 0, FOMO: 0, FRUSTRASI: 0, OVERCONFIDENT: 0 };
+  const annotated = trades.map((t, i) => {
+    const state = states[i % states.length];
+    byState[state] = (byState[state] || 0) + 1;
+    return {
+      id: i + 1,
+      ticket: t.ticket,
+      symbol: t.symbol,
+      emotional_state: state,
+      emotional_note: state === 'FOMO' ? 'Kejar harga setelah miss setup' : state === 'FRUSTRASI' ? 'Revenge setelah 2 SL' : state === 'OVERCONFIDENT' ? 'PD setelah 3 win' : null,
+      profit: t.profitNet,
+    };
+  });
+  return {
+    total_logged: annotated.length,
+    by_state: byState,
+    trades: annotated,
+  };
+}
+
+export function getDemoBacktestResult(req: BacktestRequest): BacktestResult {
+  const initialBalance = req.initial_balance ?? 10000;
+  // Simulate 300 trades with realistic V2 metrics
+  const totalTrades = 300;
+  const targetWinRate = 47 + randFloat(-2, 3);
+  const wins = Math.round((targetWinRate / 100) * totalTrades);
+  const losses = totalTrades - wins;
+  const basePrice = SYMBOL_PRICES[req.symbol] || 1.085;
+  const pipSize = PIP_SIZES[req.symbol] || 0.0001;
+  const setupTypes = ['VWAP_BOUNCE', 'EMA_CROSS', 'PIN_BAR', 'ENGULFING', 'INSIDE_BAR'];
+  const sessions = ['TOKYO', 'LONDON', 'OVERLAP'];
+
+  const trades: BacktestTrade[] = [];
+  let balance = initialBalance;
+  const startDate = new Date(req.start_date).getTime();
+  const endDate = new Date(req.end_date).getTime();
+  const stepMs = Math.max(60_000, Math.floor((endDate - startDate) / totalTrades));
+
+  for (let i = 0; i < totalTrades; i++) {
+    const direction = rand() > 0.5 ? 'BUY' : 'SELL';
+    const atr = randFloat(7, 13);
+    const slPips = atr * V2_RULES.SL_ATR_MULT + V2_RULES.SL_PIP_BUFFER;
+    const isWin = i < wins;
+    const rMult = isWin ? randFloat(1.6, 3.4) : -1;
+    const profit = rMult * (balance * V2_RULES.RISK_PCT_PER_TRADE);
+    balance += profit;
+    const openPrice = basePrice + randFloat(-0.005, 0.005);
+    const closePrice = isWin
+      ? direction === 'BUY'
+        ? openPrice + slPips * pipSize * (rMult / 2)
+        : openPrice - slPips * pipSize * (rMult / 2)
+      : direction === 'BUY'
+      ? openPrice - slPips * pipSize
+      : openPrice + slPips * pipSize;
+    const openTime = new Date(startDate + i * stepMs).toISOString();
+    const closeTime = new Date(startDate + (i + 1) * stepMs).toISOString();
+    trades.push({
+      ticket: 600000 + i,
+      symbol: req.symbol,
+      direction,
+      volume: 0.1,
+      open_price: parseFloat(openPrice.toFixed(5)),
+      close_price: parseFloat(closePrice.toFixed(5)),
+      sl: parseFloat((direction === 'BUY' ? openPrice - slPips * pipSize : openPrice + slPips * pipSize).toFixed(5)),
+      tp: parseFloat((direction === 'BUY' ? openPrice + slPips * pipSize * 2 : openPrice - slPips * pipSize * 2).toFixed(5)),
+      open_time: openTime,
+      close_time: closeTime,
+      result: isWin ? 'WIN' : 'LOSS',
+      r_multiple: parseFloat(rMult.toFixed(2)),
+      profit: parseFloat(profit.toFixed(2)),
+      pips: parseFloat((isWin ? slPips * (rMult / 2) : slPips).toFixed(1)),
+      setup_type: setupTypes[i % setupTypes.length],
+      session: sessions[i % sessions.length],
+    });
+  }
+
+  const grossProfit = trades.filter((t) => t.profit > 0).reduce((a, b) => a + b.profit, 0);
+  const grossLoss = Math.abs(trades.filter((t) => t.profit < 0).reduce((a, b) => a + b.profit, 0));
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? Infinity : 0;
+  const totalR = trades.reduce((a, b) => a + b.r_multiple, 0);
+
+  // Compute max drawdown from equity curve
+  let peak = initialBalance;
+  let maxDD = 0;
+  let running = initialBalance;
+  for (const t of trades) {
+    running += t.profit;
+    if (running > peak) peak = running;
+    const dd = ((running - peak) / peak) * 100;
+    if (dd < maxDD) maxDD = dd;
+  }
+
+  return {
+    id: Math.floor(rand() * 1000) + 1,
+    symbol: req.symbol,
+    timeframe: req.timeframe,
+    start_date: req.start_date,
+    end_date: req.end_date,
+    initial_balance: initialBalance,
+    final_balance: parseFloat(balance.toFixed(2)),
+    total_trades: totalTrades,
+    wins,
+    losses,
+    win_rate_pct: parseFloat(((wins / totalTrades) * 100).toFixed(2)),
+    r_net_avg: parseFloat((totalR / totalTrades).toFixed(3)),
+    profit_factor: profitFactor === Infinity ? 99 : parseFloat(profitFactor.toFixed(2)),
+    max_drawdown_pct: parseFloat(Math.abs(maxDD).toFixed(2)),
+    compliance_score_pct: 88,
+    trades,
+    metrics: {
+      profit_factor: profitFactor === Infinity ? 99 : parseFloat(profitFactor.toFixed(2)),
+      max_drawdown_pct: parseFloat(Math.abs(maxDD).toFixed(2)),
+      compliance_score_pct: 88,
+    },
+    created_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoHolidays(year = 2026): HolidayEntry[] {
+  return [
+    { date: `${year}-01-01`, name: "New Year's Day", country: 'Global', closed: true },
+    { date: `${year}-01-13`, name: 'Lunar New Year (early)', country: 'Asia', closed: false },
+    { date: `${year}-03-25`, name: 'Good Friday', country: 'EU/UK/US', closed: true },
+    { date: `${year}-03-28`, name: 'Easter Monday', country: 'EU/UK', closed: true },
+    { date: `${year}-05-01`, name: 'Labour Day', country: 'EU', closed: true },
+    { date: `${year}-05-30`, name: 'Memorial Day', country: 'US', closed: true },
+    { date: `${year}-06-19`, name: 'Juneteenth', country: 'US', closed: true },
+    { date: `${year}-07-04`, name: 'US Independence Day', country: 'US', closed: true },
+    { date: `${year}-08-15`, name: "Assumption Day", country: 'EU', closed: false },
+    { date: `${year}-09-07`, name: 'US Labour Day', country: 'US', closed: true },
+    { date: `${year}-11-03`, name: 'Culture Day (Japan)', country: 'JP', closed: true },
+    { date: `${year}-11-26`, name: 'US Thanksgiving', country: 'US', closed: true },
+    { date: `${year}-12-24`, name: 'Christmas Eve (early close)', country: 'Global', closed: false },
+    { date: `${year}-12-25`, name: 'Christmas Day', country: 'Global', closed: true },
+    { date: `${year}-12-26`, name: 'Boxing Day', country: 'UK/EU', closed: true },
+  ];
+}
+
+export function getDemoBotMode(): BotModeState {
+  return { mode: 'paper', paper_mode: true, dry_run: false };
+}
+
+export function getDemoStreakStatus(): StreakStatus {
+  return {
+    consecutive_losses: 0,
+    consecutive_wins: 2,
+    cooldown_active: false,
+    cooldown_until: null,
+    cooldown_reason: null,
+  };
+}
+
+export function getDemoServiceTest(service: 'mt5' | 'ollama' | 'tiingo' | 'telegram'): ServiceTestResult {
+  const baseLatency = service === 'mt5' ? 142 : service === 'ollama' ? 38 : service === 'tiingo' ? 215 : 320;
+  return {
+    ok: true,
+    message:
+      service === 'mt5'
+        ? 'connected as 50384721 (FinexIC-Markets)'
+        : service === 'ollama'
+        ? 'model llama3.2:latest available'
+        : service === 'tiingo'
+        ? 'got 8 HIGH events'
+        : 'test message sent to chat 50384721',
+    latency_ms: baseLatency + Math.floor(rand() * 30),
+    balance: service === 'mt5' ? 10000 : undefined,
+  };
+}
+
+export const DEMO_RISK_DISCLOSURE_TEXT = getDemoRiskDisclosure().text;

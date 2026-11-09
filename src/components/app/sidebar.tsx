@@ -11,6 +11,8 @@ import {
   FileText,
   Settings as SettingsIcon,
   TrendingUp,
+  FlaskConical,
+  ScrollText,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { DEMO_MODE } from '@/lib/api';
@@ -23,6 +25,8 @@ const NAV_ITEMS = [
   { id: 'signals', label: 'Sinyal V2', icon: Zap },
   { id: 'positions', label: 'Posisi & Trade', icon: Briefcase },
   { id: 'journal', label: 'Trade Journal', icon: BookOpen },
+  { id: 'backtest', label: 'Backtest Engine', icon: FlaskConical },
+  { id: 'audit', label: 'Audit Log', icon: ScrollText },
   { id: 'ai', label: 'AI Analisa', icon: Bot },
   { id: 'news', label: 'Kalender Ekonomi', icon: CalendarClock },
   { id: 'strategy', label: 'Strategi V2 Ref', icon: FileText },

@@ -21,10 +21,11 @@ import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useAppStore } from '@/lib/store';
 import { getChartData } from '@/lib/api';
+import { wsClient } from '@/lib/api';
 import { TRADING_PAIRS, V2_RULES, SESSIONS } from '@/lib/constants';
 import { cn } from '@/lib/utils';
-import type { ChartData, MarketRegime } from '@/lib/types';
-import { CandlestickChart, TrendingUp, Activity, Gauge, Zap } from 'lucide-react';
+import type { ChartData, MarketRegime, TickPrice } from '@/lib/types';
+import { CandlestickChart, TrendingUp, Activity, Gauge, Zap, Radio } from 'lucide-react';
 
 const TIMEFRAMES = ['M1', 'M5', 'M15', 'H1', 'H4'] as const;
 
@@ -72,10 +73,13 @@ function CandlestickShape(props: any) {
 export function ChartView() {
   const activeSymbol = useAppStore((s) => s.activeSymbol);
   const setActiveSymbol = useAppStore((s) => s.setActiveSymbol);
+  const livePrices = useAppStore((s) => s.livePrices);
+  const wsConnected = useAppStore((s) => s.wsConnected);
   const [timeframe, setTimeframe] = useState<typeof TIMEFRAMES[number]>('M5');
   const [chartData, setChartData] = useState<ChartData | null>(null);
   const [showBB, setShowBB] = useState(true);
   const [showVWAP, setShowVWAP] = useState(true);
+  const [flash, setFlash] = useState<'up' | 'down' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -85,6 +89,23 @@ export function ChartView() {
     return () => {
       cancelled = true;
     };
+  }, [activeSymbol]);
+
+  // Subscribe to ticks for the active symbol and trigger a green/red flash on change
+  useEffect(() => {
+    let lastBid: number | null = null;
+    const unsub = wsClient.subscribe<TickPrice>('tick', (event) => {
+      if (event.symbol !== activeSymbol) return;
+      if (typeof event.bid !== 'number') return;
+      if (lastBid !== null) {
+        if (event.bid > lastBid) setFlash('up');
+        else if (event.bid < lastBid) setFlash('down');
+        // Reset flash after 200ms
+        setTimeout(() => setFlash(null), 200);
+      }
+      lastBid = event.bid;
+    });
+    return unsub;
   }, [activeSymbol]);
 
   // Derived loading state - true when data missing or symbol mismatch
@@ -178,6 +199,63 @@ export function ChartView() {
           </Button>
         </div>
       </div>
+
+      {/* Live price ticker */}
+      {(() => {
+        const live = livePrices[activeSymbol];
+        const digits = activeSymbol === 'USDJPY' ? 3 : 5;
+        const livePrice = live ? (live.bid + live.ask) / 2 : latest.close;
+        return (
+          <div
+            className={cn(
+              'flex items-center gap-4 rounded-md border bg-muted/20 p-2.5 text-xs transition-colors',
+              flash === 'up' && 'border-bull/60 bg-bull/10',
+              flash === 'down' && 'border-bear/60 bg-bear/10',
+            )}
+          >
+            <div className="flex items-center gap-1.5">
+              <Radio
+                className={cn(
+                  'h-3.5 w-3.5',
+                  wsConnected ? 'text-bull animate-pulse' : 'text-muted-foreground',
+                )}
+              />
+              <span className="text-muted-foreground">
+                {wsConnected ? 'LIVE' : 'POLLING'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Bid</span>
+              <span className={cn('font-mono tabular-nums font-semibold', flash === 'up' ? 'text-bull' : flash === 'down' ? 'text-bear' : 'text-foreground')}>
+                {live ? live.bid.toFixed(digits) : '—'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Ask</span>
+              <span className={cn('font-mono tabular-nums font-semibold', flash === 'up' ? 'text-bull' : flash === 'down' ? 'text-bear' : 'text-foreground')}>
+                {live ? live.ask.toFixed(digits) : '—'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">Spread</span>
+              <span className="font-mono tabular-nums">
+                {live ? live.spread.toFixed(digits === 3 ? 2 : 4) : '—'} pip
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 ml-auto">
+              <span className="text-muted-foreground">Mid</span>
+              <span className="font-mono tabular-nums font-semibold">
+                {livePrice.toFixed(digits)}
+              </span>
+              {live && (
+                <span className="text-[10px] text-muted-foreground">
+                  · updated {new Date(live.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' })}
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Top stats */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">

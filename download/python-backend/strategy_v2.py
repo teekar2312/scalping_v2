@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -143,12 +143,18 @@ def is_session_active(now_wib: datetime | None = None) -> tuple[str | None, bool
         * London lunch 17-19:30 (no trading)
         * Monday early session (after weekend gap) - 00:00-07:00 WIB
         * Friday late session - after 22:00 WIB
+        * FX market holidays (audit-fix Sprint 2 #17) - via holidays.is_holiday
     """
+    from holidays import is_holiday  # local import to avoid module cycle
     if now_wib is None:
         now_wib = datetime.now(WIB_TZ)
     h = now_wib.hour
     m = now_wib.minute
     weekday = now_wib.weekday()   # Mon=0 ... Sun=6
+
+    # Holiday check (audit-fix #17) - applies regardless of weekday
+    if is_holiday(now_wib):
+        return None, True
 
     # Blacklist: Monday early (gap risk) - first 7 hours
     if weekday == 0 and h < 7:

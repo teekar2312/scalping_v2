@@ -19,15 +19,38 @@ Key responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
+import config as cfg
 from config import AppConfig, settings
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def _math_floor(x: float) -> int:
+    """Floor helper to avoid clashing with stdlib import elsewhere."""
+    return int(math.floor(x))
+
+
+# --------------------------------------------------------------------------- #
+# Exceptions
+# --------------------------------------------------------------------------- #
+
+class MT5UnavailableError(RuntimeError):
+    """Raised when MT5 is not installed / not on Windows."""
+
+
+class OrderTimeoutError(RuntimeError):
+    """Raised when an MT5 order call exceeds the configured timeout."""
+
 
 # --------------------------------------------------------------------------- #
 # Try to import MetaTrader5 - it is Windows-only
@@ -41,10 +64,6 @@ except Exception as exc:  # pragma: no cover - import-time only on Linux
     mt5 = None  # type: ignore
     MT5_AVAILABLE = False
     MT5_IMPORT_ERROR = str(exc)
-
-
-class MT5UnavailableError(RuntimeError):
-    """Raised when MT5 is not installed / not on Windows."""
 
 
 # --------------------------------------------------------------------------- #
@@ -349,6 +368,12 @@ class MT5Connector:
             ))
         return bars
 
+    def get_candles_cached(self, symbol: str, timeframe: str,
+                           count: int = 200) -> list[CandleBar]:
+        """Cache-wrapped version of :meth:`get_candles` (TTL ~60s)."""
+        from cache import get_candles_cached
+        return get_candles_cached(symbol, timeframe, count, self.get_candles)
+
     # ----- positions -------------------------------------------------------- #
 
     def get_positions(self, symbol: str | None = None) -> list[Position]:
@@ -386,7 +411,7 @@ class MT5Connector:
                     sl: float,
                     tp: float,
                     comment: str = "",
-                    deviation: int = 20) -> dict[str, Any]:
+                    deviation: int | None = None) -> dict[str, Any]:
         """Place a market order (buy/sell) with SL & TP.
 
         Parameters
@@ -401,8 +426,10 @@ class MT5Connector:
             Stop loss and take profit prices (0 to omit).
         comment : str
             Order comment.
-        deviation : int
-            Max slippage in points.
+        deviation : int | None
+            Max slippage in points.  Defaults to ``MAX_SLIPPAGE_POINTS_ENTRY``.
+            If the broker rejects on slippage, the call retries up to
+            ``SLIPPAGE_RETRY_ATTEMPTS`` times with a 50% wider deviation.
 
         Returns
         -------
@@ -414,6 +441,42 @@ class MT5Connector:
             raise ValueError("direction must be 'buy' or 'sell'")
         self.ensure_symbol_visible(symbol)
 
+        base_dev = (int(deviation) if deviation is not None
+                    else int(cfg.MAX_SLIPPAGE_POINTS_ENTRY))
+        retries = max(1, int(cfg.SLIPPAGE_RETRY_ATTEMPTS))
+        last_result: dict[str, Any] = {
+            "ok": False, "ticket": 0, "retcode": -1, "comment": "no_attempt",
+        }
+        for attempt in range(1, retries + 1):
+            dev = int(round(base_dev * (1.5 ** (attempt - 1))))
+            result = self._send_market_order(
+                symbol=symbol, direction=direction, volume=volume,
+                sl=sl, tp=tp, comment=comment, deviation=dev,
+            )
+            last_result = result
+            if result.get("ok"):
+                return result
+            # MT5 retcode 10004 / 10016 / 10021 -> requote / invalid prices /
+            # slippage exceeded.  Retry with larger deviation.
+            rc = result.get("retcode", -1)
+            if rc in (10004, 10016, 10021) and attempt < retries:
+                logger.info("place_order retry %d/%d (retcode=%s, dev=%d)",
+                            attempt, retries, rc, dev)
+                time.sleep(0.2)
+                continue
+            # Non-slippage error or out of retries
+            break
+        return last_result
+
+    def _send_market_order(self,
+                           symbol: str,
+                           direction: str,
+                           volume: float,
+                           sl: float,
+                           tp: float,
+                           comment: str,
+                           deviation: int) -> dict[str, Any]:
+        """Single attempt at sending a market order via ``order_send``."""
         tick = mt5.symbol_info_tick(symbol)  # type: ignore[union-attr]
         if tick is None:
             return {"ok": False, "ticket": 0, "retcode": -1,
@@ -476,7 +539,10 @@ class MT5Connector:
         }
 
     def close_position(self, ticket: int) -> dict[str, Any]:
-        """Close a single position by ticket (market reverse)."""
+        """Close a single position by ticket (market reverse).
+
+        Uses the looser ``MAX_SLIPPAGE_POINTS_CLOSE`` deviation.
+        """
         self._check()
         positions = mt5.positions_get(ticket=ticket)  # type: ignore[union-attr]
         if not positions:
@@ -495,7 +561,7 @@ class MT5Connector:
             "type": close_type,
             "position": int(ticket),
             "price": float(close_price),
-            "deviation": 50,
+            "deviation": int(cfg.MAX_SLIPPAGE_POINTS_CLOSE),
             "magic": 20241101,
             "comment": "bot_close",
             "type_time": mt5.ORDER_TIME_GTC,  # type: ignore[union-attr]
@@ -510,6 +576,122 @@ class MT5Connector:
             "ok": bool(ok),
             "retcode": int(result.retcode),
             "comment": str(result.comment),
+        }
+
+    # ----- partial close (audit-fix Sprint 1 #1) ---------------------------- #
+
+    def partial_close(self, ticket: int,
+                      volume_to_close: float) -> dict[str, Any]:
+        """Partially close an open position.
+
+        MT5 doesn't have a dedicated partial-close order type; the standard
+        recipe is to send an opposite-direction market order whose volume is
+        strictly smaller than the open position's.  MT5 then reduces the
+        original position by that amount and keeps the same ticket.
+
+        Parameters
+        ----------
+        ticket : int
+            MT5 position ticket.
+        volume_to_close : float
+            Lot size to close.  Must be > 0 and < current position volume,
+            and must respect the symbol's ``volume_min`` and ``volume_step``.
+
+        Returns
+        -------
+        dict
+            ``{"ok": bool, "ticket_new": int, "retcode": int,
+               "closed_volume": float, "remaining_volume": float,
+               "comment": str}``
+        """
+        self._check()
+        positions = mt5.positions_get(ticket=ticket)  # type: ignore[union-attr]
+        if not positions:
+            return {"ok": False, "retcode": -1, "comment": "ticket not found",
+                    "closed_volume": 0.0, "remaining_volume": 0.0,
+                    "ticket_new": 0}
+        pos = positions[0]
+        current_vol = float(pos.volume)
+        sym_info = self.get_symbol_info(pos.symbol)
+
+        # Snap requested volume to volume_step
+        step = sym_info.volume_step if sym_info.volume_step > 0 else 0.01
+        snapped = (_math_floor(volume_to_close / step) * step) if step > 0 \
+            else volume_to_close
+        snapped = round(snapped, 2)
+        if snapped <= 0:
+            return {"ok": False, "retcode": -1,
+                    "comment": f"volume_to_close={volume_to_close} < step",
+                    "closed_volume": 0.0, "remaining_volume": current_vol,
+                    "ticket_new": 0}
+        # If requested volume < volume_min OR would leave a sub-min residual,
+        # just full-close instead.
+        if snapped < sym_info.volume_min:
+            logger.info("partial_close: vol %s < volume_min %s - full close",
+                        snapped, sym_info.volume_min)
+            full = self.close_position(ticket)
+            return {
+                **full,
+                "closed_volume": current_vol,
+                "remaining_volume": 0.0,
+                "ticket_new": 0,
+            }
+        residual = round(current_vol - snapped, 2)
+        if 0 < residual < sym_info.volume_min:
+            logger.info("partial_close: residual %s < volume_min %s - full close",
+                        residual, sym_info.volume_min)
+            full = self.close_position(ticket)
+            return {
+                **full,
+                "closed_volume": current_vol,
+                "remaining_volume": 0.0,
+                "ticket_new": 0,
+            }
+
+        tick = mt5.symbol_info_tick(pos.symbol)  # type: ignore[union-attr]
+        if tick is None:
+            return {"ok": False, "retcode": -1, "comment": "no tick",
+                    "closed_volume": 0.0, "remaining_volume": current_vol,
+                    "ticket_new": 0}
+        is_buy = pos.type == 0
+        opp_type = mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY  # type: ignore[union-attr]
+        opp_price = tick.bid if is_buy else tick.ask
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,  # type: ignore[union-attr]
+            "symbol": pos.symbol,
+            "volume": float(snapped),
+            "type": opp_type,
+            "position": int(ticket),
+            "price": float(opp_price),
+            "deviation": int(cfg.MAX_SLIPPAGE_POINTS_CLOSE),
+            "magic": 20241101,
+            "comment": "v2_partial",
+            "type_time": mt5.ORDER_TIME_GTC,  # type: ignore[union-attr]
+            "type_filling": mt5.ORDER_FILLING_IOC,  # type: ignore[union-attr]
+        }
+        result = mt5.order_send(request)  # type: ignore[union-attr]
+        if result is None:
+            return {"ok": False, "retcode": -1,
+                    "comment": "order_send returned None",
+                    "closed_volume": 0.0, "remaining_volume": current_vol,
+                    "ticket_new": 0}
+        ok = result.retcode == mt5.TRADE_RETCODE_DONE  # type: ignore[union-attr]
+        # Re-read the position to find the true remaining volume.
+        new_remaining = current_vol
+        if ok:
+            try:
+                fresh = mt5.positions_get(ticket=ticket)  # type: ignore[union-attr]
+                if fresh:
+                    new_remaining = float(fresh[0].volume)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("partial_close post-read failed: %s", exc)
+        return {
+            "ok": bool(ok),
+            "ticket_new": int(result.order),
+            "retcode": int(result.retcode),
+            "comment": str(result.comment),
+            "closed_volume": round(current_vol - new_remaining, 2),
+            "remaining_volume": round(new_remaining, 2),
         }
 
     def close_all_positions(self) -> list[dict[str, Any]]:
@@ -532,6 +714,80 @@ class MT5Connector:
     def get_pip_value(self, symbol: str) -> float:
         """Pip value per 1.0 lot, in account currency."""
         return self.get_symbol_info(symbol).pip_value_per_lot
+
+
+# --------------------------------------------------------------------------- #
+# Async order-call wrappers (audit-fix Sprint 1 #8)
+# --------------------------------------------------------------------------- #
+
+async def place_order_async(connector: MT5Connector,
+                            *args: Any,
+                            timeout_s: float | None = None,
+                            **kwargs: Any) -> dict[str, Any]:
+    """Async wrapper that runs ``place_order`` in a thread with timeout.
+
+    Raises :class:`OrderTimeoutError` if the call exceeds ``timeout_s``.
+    """
+    timeout = timeout_s if timeout_s is not None else float(cfg.ORDER_TIMEOUT_SECONDS)
+    coro: Awaitable[dict[str, Any]] = asyncio.to_thread(
+        connector.place_order, *args, **kwargs)
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        logger.error("place_order timed out after %ss", timeout)
+        raise OrderTimeoutError(
+            f"place_order timed out after {timeout}s") from exc
+
+
+async def modify_position_async(connector: MT5Connector,
+                                ticket: int,
+                                sl: float | None = None,
+                                tp: float | None = None,
+                                timeout_s: float | None = None
+                                ) -> dict[str, Any]:
+    """Async ``modify_position`` with timeout."""
+    timeout = timeout_s if timeout_s is not None else float(cfg.ORDER_TIMEOUT_SECONDS)
+    coro: Awaitable[dict[str, Any]] = asyncio.to_thread(
+        connector.modify_position, ticket, sl, tp)
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        logger.error("modify_position timed out after %ss", timeout)
+        raise OrderTimeoutError(
+            f"modify_position timed out after {timeout}s") from exc
+
+
+async def close_position_async(connector: MT5Connector,
+                               ticket: int,
+                               timeout_s: float | None = None
+                               ) -> dict[str, Any]:
+    """Async ``close_position`` with timeout."""
+    timeout = timeout_s if timeout_s is not None else float(cfg.ORDER_TIMEOUT_SECONDS)
+    coro: Awaitable[dict[str, Any]] = asyncio.to_thread(
+        connector.close_position, ticket)
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        logger.error("close_position timed out after %ss", timeout)
+        raise OrderTimeoutError(
+            f"close_position timed out after {timeout}s") from exc
+
+
+async def partial_close_async(connector: MT5Connector,
+                              ticket: int,
+                              volume_to_close: float,
+                              timeout_s: float | None = None
+                              ) -> dict[str, Any]:
+    """Async ``partial_close`` with timeout."""
+    timeout = timeout_s if timeout_s is not None else float(cfg.ORDER_TIMEOUT_SECONDS)
+    coro: Awaitable[dict[str, Any]] = asyncio.to_thread(
+        connector.partial_close, ticket, volume_to_close)
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        logger.error("partial_close timed out after %ss", timeout)
+        raise OrderTimeoutError(
+            f"partial_close timed out after {timeout}s") from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -558,8 +814,10 @@ def reset_connector() -> None:
 
 
 __all__ = [
-    "MT5Connector", "MT5UnavailableError",
+    "MT5Connector", "MT5UnavailableError", "OrderTimeoutError",
     "AccountInfo", "SymbolInfo", "CandleBar", "Position",
     "MT5_AVAILABLE", "MT5_IMPORT_ERROR",
     "get_connector", "reset_connector",
+    "place_order_async", "modify_position_async",
+    "close_position_async", "partial_close_async",
 ]

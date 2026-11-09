@@ -32,6 +32,24 @@ except ImportError:  # pragma: no cover - dotenv is optional at import time
 
 
 # --------------------------------------------------------------------------- #
+# Env var helpers (defined early so module-level constants can use them)
+# --------------------------------------------------------------------------- #
+
+def _require(name: str) -> str:
+    """Fetch a required environment variable or raise a clear error."""
+    val = os.environ.get(name)
+    if not val:
+        raise RuntimeError(f"Required environment variable '{name}' is not set. "
+                           f"Copy .env.example to .env and fill in the values.")
+    return val
+
+
+def _get(name: str, default: str) -> str:
+    """Return env var ``name`` or ``default`` if unset."""
+    return os.environ.get(name, default)
+
+
+# --------------------------------------------------------------------------- #
 # Constants baked from the V2 strategy specification
 # --------------------------------------------------------------------------- #
 
@@ -81,6 +99,47 @@ NEWS_BLACKOUT_MINUTES: Final[int] = 30
 
 # Default trading loop interval (seconds).
 TRADING_LOOP_INTERVAL: Final[float] = 15.0
+
+# Order placement timeout (seconds).  Wraps place_order / modify_position /
+# close_position calls in ``asyncio.wait_for`` so a stuck MT5 order never
+# blocks the loop indefinitely.
+ORDER_TIMEOUT_SECONDS: Final[float] = float(_get("ORDER_TIMEOUT_SECONDS", "30"))
+
+# Maximum slippage (deviation in points) accepted when placing / closing
+# orders.  Two separate values are exposed:
+#   * ENTRY  - tighter, used on new entries (default 20)
+#   * CLOSE  - looser, used on partial / full closes (default 50)
+MAX_SLIPPAGE_POINTS_ENTRY: Final[int] = int(_get("MAX_SLIPPAGE_POINTS", "20"))
+MAX_SLIPPAGE_POINTS_CLOSE: Final[int] = 50
+# Number of retry attempts if the broker rejects an order due to slippage
+# (each retry increases the deviation by 50%).
+SLIPPAGE_RETRY_ATTEMPTS: Final[int] = int(_get("SLIPPAGE_RETRY_ATTEMPTS", "2"))
+
+# Candle cache TTL (seconds) - avoids hammering MT5 copy_rates_* per tick.
+CANDLE_CACHE_TTL_S: Final[int] = int(_get("CANDLE_CACHE_TTL_S", "60"))
+
+# Paper trading mode - simulate trades in DB without calling place_order.
+PAPER_MODE: Final[bool] = _get("PAPER_MODE", "false").lower() in ("1", "true", "yes")
+
+# Dry run mode - generate signals + publish events but NEVER place orders
+# (and don't simulate P&L either - just log).
+DRY_RUN: Final[bool] = _get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+
+# Friday weekend position closer - all open positions are force-closed at
+# this WIB time (HH:MM).  Default 21:30 (30 min before the 22:00 cutoff).
+WEEKEND_CLOSE_TIME: Final[str] = _get("WEEKEND_CLOSE_TIME", "21:30")
+
+# Telegram notifications (optional - empty values disable alerts).
+TELEGRAM_BOT_TOKEN: Final[str] = _get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID: Final[str] = _get("TELEGRAM_CHAT_ID", "")
+
+# Margin call prevention thresholds (margin level %).
+MARGIN_WARNING_PCT: Final[float] = 150.0   # log + alert
+MARGIN_CALL_PCT: Final[float] = 120.0      # auto close worst position
+MARGIN_EMERGENCY_PCT: Final[float] = 100.0  # close ALL + kill switch
+
+# NTP time-sync drift tolerance (seconds).  Drift above this triggers WARN.
+NTP_DRIFT_TOLERANCE_S: Final[float] = 5.0
 
 
 # --------------------------------------------------------------------------- #
@@ -181,19 +240,6 @@ class AppConfig:
 # --------------------------------------------------------------------------- #
 # Loader
 # --------------------------------------------------------------------------- #
-
-def _require(name: str) -> str:
-    """Fetch a required environment variable or raise a clear error."""
-    val = os.environ.get(name)
-    if not val:
-        raise RuntimeError(f"Required environment variable '{name}' is not set. "
-                           f"Copy .env.example to .env and fill in the values.")
-    return val
-
-
-def _get(name: str, default: str) -> str:
-    return os.environ.get(name, default)
-
 
 def load_config() -> AppConfig:
     """Load and validate the application configuration from the environment.
@@ -303,5 +349,12 @@ __all__ = [
     "TRAIL_ATR_MULT", "BE_BUFFER_PIPS",
     "ADX_TRENDING", "ADX_RANGING", "NEWS_BLACKOUT_MINUTES",
     "TRADING_LOOP_INTERVAL",
+    "ORDER_TIMEOUT_SECONDS",
+    "MAX_SLIPPAGE_POINTS_ENTRY", "MAX_SLIPPAGE_POINTS_CLOSE",
+    "SLIPPAGE_RETRY_ATTEMPTS", "CANDLE_CACHE_TTL_S",
+    "PAPER_MODE", "DRY_RUN", "WEEKEND_CLOSE_TIME",
+    "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+    "MARGIN_WARNING_PCT", "MARGIN_CALL_PCT", "MARGIN_EMERGENCY_PCT",
+    "NTP_DRIFT_TOLERANCE_S",
     "load_config", "settings",
 ]

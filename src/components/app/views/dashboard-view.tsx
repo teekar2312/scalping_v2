@@ -2,6 +2,17 @@
 
 import { useEffect, useState } from 'react';
 import {
+  AreaChart,
+  Area,
+  Line,
+  ComposedChart,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  ReferenceLine,
+} from 'recharts';
+import {
   Wallet,
   TrendingUp,
   TrendingDown,
@@ -14,6 +25,9 @@ import {
   Clock,
   Target,
   Percent,
+  X,
+  Flame,
+  Snowflake,
 } from 'lucide-react';
 import { StatCard, PanelCard, StatusDot } from '../shared';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +40,8 @@ import {
   getOpenTrades,
   getSignals,
   getNews,
+  getEquityCurve,
+  getRiskDisclosure,
 } from '@/lib/api';
 import { TRADING_PAIRS, V2_RULES } from '@/lib/constants';
 import { cn } from '@/lib/utils';
@@ -35,28 +51,288 @@ import type {
   Signal,
   NewsEvent,
   BotStatus,
+  EquityCurvePoint,
 } from '@/lib/types';
 import { BotControl } from '../bot-control';
+
+function RiskDisclosureBanner() {
+  const [text, setText] = useState<string | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    getRiskDisclosure()
+      .then((r) => {
+        if (mounted) setText(r.text);
+      })
+      .catch(() => {
+        // Silent fail — disclosure is non-blocking.
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  if (dismissed || !text) return null;
+
+  return (
+    <div className="rounded-md border border-warn/40 bg-warn/10 p-2.5 flex items-start gap-2 text-xs">
+      <AlertTriangle className="h-4 w-4 text-warn shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <strong className="text-warn">Risk Disclosure:</strong> Trading forex
+        melibatkan risiko kerugian signifikan. Strategi V2 bukan jaminan profit.
+        Patuhi tiered stop (-1%/-2%/-4%/-10%) & roadmap 9 bulan. Past performance
+        (backtest) bukan indikator hasil future.
+      </div>
+      <button
+        onClick={() => setDismissed(true)}
+        className="text-muted-foreground hover:text-foreground"
+        aria-label="Dismiss"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+function EquityCurvePanel({ points }: { points: EquityCurvePoint[] }) {
+  const data = points.map((p) => ({
+    time: new Date(p.timestamp).toLocaleTimeString('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Asia/Jakarta',
+    }),
+    balance: p.balance,
+    equity: p.equity,
+    drawdown: p.drawdown_pct,
+    floating: p.floating_pnl,
+  }));
+
+  const peak = points.reduce((m, p) => (p.balance > m ? p.balance : m), 0);
+  const currentEquity = points.length > 0 ? points[points.length - 1].equity : 0;
+  const floatingPnl = points.length > 0 ? points[points.length - 1].floating_pnl : 0;
+  const maxDD = points.reduce((m, p) => (Math.abs(p.drawdown_pct) > Math.abs(m) ? p.drawdown_pct : m), 0);
+
+  return (
+    <PanelCard
+      title="Equity Curve (24h)"
+      subtitle="Balance & equity time series · drawdown shading"
+      icon={TrendingUp}
+      className="xl:col-span-2"
+      actions={
+        <div className="flex items-center gap-3 text-[10px]">
+          <div className="flex flex-col">
+            <span className="text-muted-foreground">Peak</span>
+            <span className="font-semibold tabular-nums">{peak.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-muted-foreground">Equity</span>
+            <span className="font-semibold tabular-nums text-info">{currentEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-muted-foreground">Floating</span>
+            <span className={cn('font-semibold tabular-nums', floatingPnl >= 0 ? 'text-bull' : 'text-bear')}>
+              {floatingPnl >= 0 ? '+' : ''}{floatingPnl.toFixed(2)}
+            </span>
+          </div>
+          <div className="flex flex-col">
+            <span className="text-muted-foreground">Max DD 24h</span>
+            <span className="font-semibold tabular-nums text-bear">{maxDD.toFixed(2)}%</span>
+          </div>
+        </div>
+      }
+      bodyClassName="h-[240px]"
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id="dashEquity" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--info)" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="var(--info)" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="dashBal" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--bull)" stopOpacity={0.15} />
+              <stop offset="100%" stopColor="var(--bull)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis
+            dataKey="time"
+            tick={{ fontSize: 10 }}
+            interval={Math.max(0, Math.floor(data.length / 12))}
+            stroke="var(--muted-foreground)"
+          />
+          <YAxis
+            tick={{ fontSize: 10 }}
+            stroke="var(--muted-foreground)"
+            width={70}
+            tickFormatter={(v) => Number(v).toFixed(0)}
+            orientation="right"
+            domain={['auto', 'auto']}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: 'var(--popover)',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              fontSize: '11px',
+            }}
+            labelStyle={{ color: 'var(--muted-foreground)' }}
+            formatter={(value: number, name: string) => [
+              Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+              name === 'balance' ? 'Balance' : name === 'equity' ? 'Equity' : 'Floating',
+            ]}
+          />
+          <Area type="monotone" dataKey="balance" stroke="var(--bull)" strokeWidth={1.5} fill="url(#dashBal)" name="balance" />
+          <Area type="monotone" dataKey="equity" stroke="var(--info)" strokeWidth={1.5} fill="url(#dashEquity)" name="equity" />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </PanelCard>
+  );
+}
+
+function StreakStatusPanel() {
+  const consecutiveLosses = useAppStore((s) => s.consecutiveLosses);
+  const consecutiveWins = useAppStore((s) => s.consecutiveWins);
+  const cooldownActive = useAppStore((s) => s.cooldownActive);
+  const cooldownUntil = useAppStore((s) => s.cooldownUntil);
+  const cooldownReason = useAppStore((s) => s.cooldownReason);
+  const marginWarning = useAppStore((s) => s.marginWarning);
+
+  const cooldownTime = cooldownUntil
+    ? new Date(cooldownUntil).toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: 'Asia/Jakarta',
+      })
+    : null;
+
+  const lossDanger = consecutiveLosses >= 2;
+
+  return (
+    <PanelCard title="Streak & Cooldown" subtitle="V2 psychological safety" icon={Flame}>
+      <div className="flex flex-col gap-3 pt-3">
+        <div className="grid grid-cols-2 gap-2">
+          <div
+            className={cn(
+              'rounded-md border p-3',
+              lossDanger ? 'border-bear/40 bg-bear/10' : 'border-border',
+            )}
+          >
+            <div className="text-[10px] text-muted-foreground uppercase">Consecutive Losses</div>
+            <div className={cn('text-2xl font-bold tabular-nums', lossDanger ? 'text-bear' : 'text-foreground')}>
+              {consecutiveLosses}
+            </div>
+            {lossDanger && (
+              <div className="text-[10px] text-bear mt-1 flex items-center gap-1">
+                <AlertTriangle className="h-2.5 w-2.5" />
+                Tutup platform 30 menit
+              </div>
+            )}
+          </div>
+          <div
+            className={cn(
+              'rounded-md border p-3',
+              consecutiveWins >= 3 ? 'border-bull/40 bg-bull/10' : 'border-border',
+            )}
+          >
+            <div className="text-[10px] text-muted-foreground uppercase">Consecutive Wins</div>
+            <div className={cn('text-2xl font-bold tabular-nums', consecutiveWins >= 3 ? 'text-bull' : 'text-foreground')}>
+              {consecutiveWins}
+            </div>
+            {consecutiveWins >= 3 && (
+              <div className="text-[10px] text-bull mt-1">
+                Hati-hati overconfidence — tetap ikut sistem
+              </div>
+            )}
+          </div>
+        </div>
+
+        {cooldownActive && (
+          <div className="rounded-md border border-warn/40 bg-warn/10 p-3 text-xs flex items-center gap-2">
+            <Snowflake className="h-4 w-4 text-warn shrink-0" />
+            <div>
+              <div className="font-semibold text-warn">COOLDOWN ACTIVE</div>
+              <div className="text-muted-foreground">
+                Sampai {cooldownTime} WIB · {cooldownReason ?? 'recovery window'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {marginWarning !== null && (
+          <div className="rounded-md border border-bear/40 bg-bear/10 p-3 text-xs flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-bear shrink-0" />
+            <div>
+              <div className="font-semibold text-bear">MARGIN WARNING</div>
+              <div className="text-muted-foreground">
+                Margin level {marginWarning}% — reduce exposure
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!cooldownActive && marginWarning === null && !lossDanger && consecutiveWins < 3 && (
+          <div className="text-[10px] text-muted-foreground text-center py-1">
+            Tidak ada alert aktif. Psikologi terjaga.
+          </div>
+        )}
+      </div>
+    </PanelCard>
+  );
+}
+
+function StageBadge({ trade }: { trade: Trade }) {
+  // Derive stage from profit / current price vs tp1/tp2
+  const profit = trade.profitNet ?? 0;
+  let stage: 'OPEN' | 'TP1_HIT' | 'TP2_HIT' | 'TRAILING' = 'OPEN';
+  if (trade.tp2 !== null && Math.abs(profit) > 30) {
+    stage = 'TP2_HIT';
+  } else if (profit > 5) {
+    stage = 'TP1_HIT';
+  } else if (profit > 0) {
+    stage = 'TRAILING';
+  }
+  const colorClass =
+    stage === 'TP1_HIT' || stage === 'TP2_HIT'
+      ? 'text-bull border-bull'
+      : stage === 'TRAILING'
+      ? 'text-info border-info'
+      : 'text-muted-foreground';
+  return (
+    <Badge variant="outline" className={cn('text-[9px] px-1 py-0', colorClass)}>
+      {stage.replace('_', ' ')}
+    </Badge>
+  );
+}
 
 export function DashboardView() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [news, setNews] = useState<NewsEvent[]>([]);
+  const [equity, setEquity] = useState<EquityCurvePoint[]>([]);
   const [loading, setLoading] = useState(true);
   const setActiveView = useAppStore((s) => s.setActiveView);
   const activeSymbol = useAppStore((s) => s.activeSymbol);
   const setActiveSymbol = useAppStore((s) => s.setActiveSymbol);
+  const livePrices = useAppStore((s) => s.livePrices);
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([getSystemStatus(), getOpenTrades(), getSignals(), getNews()])
-      .then(([s, t, sig, n]) => {
+    Promise.all([
+      getSystemStatus(),
+      getOpenTrades(),
+      getSignals(),
+      getNews(),
+      getEquityCurve(24),
+    ])
+      .then(([s, t, sig, n, eq]) => {
         if (!mounted) return;
         setStatus(s);
         setTrades(t);
         setSignals(sig);
         setNews(n);
+        setEquity(eq);
       })
       .finally(() => mounted && setLoading(false));
     return () => {
@@ -87,6 +363,9 @@ export function DashboardView() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
+      {/* Risk disclosure */}
+      <RiskDisclosureBanner />
+
       {/* Top row: Account + System Status + Risk Status */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
@@ -124,6 +403,9 @@ export function DashboardView() {
           variant={weeklyPnlPct >= 0 ? 'bull' : 'bear'}
         />
       </div>
+
+      {/* Equity curve (full width on top of detail row) */}
+      {equity.length > 0 && <EquityCurvePanel points={equity} />}
 
       {/* System Status + Bot Control + Risk Status */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
@@ -222,76 +504,90 @@ export function DashboardView() {
           </div>
         </PanelCard>
 
-        {/* Active Symbol Quick Select + News */}
-        <PanelCard
-          title="Pair Monitor"
-          subtitle="Klik untuk lihat chart"
-          icon={Target}
-        >
-          <div className="flex flex-col gap-2 pt-3">
-            {TRADING_PAIRS.map((pair) => {
-              const isActive = activeSymbol === pair.symbol;
-              return (
-                <button
-                  key={pair.symbol}
-                  onClick={() => {
-                    setActiveSymbol(pair.symbol);
-                    setActiveView('chart');
-                  }}
-                  className={cn(
-                    'flex items-center justify-between rounded-md border px-3 py-2 text-left transition-colors',
-                    isActive ? 'border-primary bg-accent' : 'hover:bg-accent/50'
-                  )}
-                >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className="h-2 w-2 rounded-full"
-                      style={{ backgroundColor: pair.color }}
-                    />
-                    <div>
-                      <div className="text-sm font-semibold">{pair.name}</div>
-                      <div className="text-[10px] text-muted-foreground">
-                        ADR {pair.adr} · {pair.volatility}
-                      </div>
+        {/* Streak status (new) */}
+        <StreakStatusPanel />
+      </div>
+
+      {/* Active Symbol Quick Select + News */}
+      <PanelCard
+        title="Pair Monitor"
+        subtitle="Klik untuk lihat chart · live price dari WebSocket"
+        icon={Target}
+      >
+        <div className="flex flex-col gap-2 pt-3">
+          {TRADING_PAIRS.map((pair) => {
+            const isActive = activeSymbol === pair.symbol;
+            const live = livePrices[pair.symbol];
+            return (
+              <button
+                key={pair.symbol}
+                onClick={() => {
+                  setActiveSymbol(pair.symbol);
+                  setActiveView('chart');
+                }}
+                className={cn(
+                  'flex items-center justify-between rounded-md border px-3 py-2 text-left transition-colors',
+                  isActive ? 'border-primary bg-accent' : 'hover:bg-accent/50'
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <div
+                    className="h-2 w-2 rounded-full"
+                    style={{ backgroundColor: pair.color }}
+                  />
+                  <div>
+                    <div className="text-sm font-semibold">{pair.name}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      ADR {pair.adr} · {pair.volatility}
                     </div>
                   </div>
-                  <Badge variant="outline" className="text-[10px]">#{pair.rank}</Badge>
-                </button>
-              );
-            })}
-            <div className="mt-2 border-t pt-2">
-              <div className="text-xs font-medium text-muted-foreground mb-1.5">
-                News HIGH Berikutnya
-              </div>
-              <ScrollArea className="h-20">
-                <div className="flex flex-col gap-1">
-                  {todayHighNews.map((n) => (
-                    <div key={n.id} className="flex items-center gap-2 text-xs">
-                      <AlertTriangle className="h-3 w-3 text-bear" />
-                      <span className="font-medium">{n.title}</span>
-                      <span className="ml-auto text-muted-foreground tabular-nums">
-                        <Clock className="inline h-2.5 w-2.5 mr-0.5" />
-                        {new Date(n.eventTime).toLocaleTimeString('id-ID', {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          timeZone: 'Asia/Jakarta',
-                        })}
-                      </span>
-                    </div>
-                  ))}
                 </div>
-              </ScrollArea>
+                <div className="flex items-center gap-3">
+                  {live && (
+                    <div className="text-right">
+                      <div className="text-[10px] text-muted-foreground">Bid / Ask</div>
+                      <div className="text-[10px] font-mono tabular-nums">
+                        {live.bid.toFixed(pair.symbol === 'USDJPY' ? 3 : 5)} / {live.ask.toFixed(pair.symbol === 'USDJPY' ? 3 : 5)}
+                      </div>
+                    </div>
+                  )}
+                  <Badge variant="outline" className="text-[10px]">#{pair.rank}</Badge>
+                </div>
+              </button>
+            );
+          })}
+          <div className="mt-2 border-t pt-2">
+            <div className="text-xs font-medium text-muted-foreground mb-1.5">
+              News HIGH Berikutnya
             </div>
+            <ScrollArea className="h-20">
+              <div className="flex flex-col gap-1">
+                {todayHighNews.map((n) => (
+                  <div key={n.id} className="flex items-center gap-2 text-xs">
+                    <AlertTriangle className="h-3 w-3 text-bear" />
+                    <span className="font-medium">{n.title}</span>
+                    <span className="ml-auto text-muted-foreground tabular-nums">
+                      <Clock className="inline h-2.5 w-2.5 mr-0.5" />
+                      {new Date(n.eventTime).toLocaleTimeString('id-ID', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        timeZone: 'Asia/Jakarta',
+                      })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
           </div>
-        </PanelCard>
-      </div>
+        </div>
+      </PanelCard>
 
       {/* Open Positions + Active Signals */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* Open Positions */}
         <PanelCard
           title="Open Positions"
-          subtitle={`${trades.length} aktif`}
+          subtitle={`${trades.length} aktif · stage tracking`}
           icon={TrendingUp}
           className="xl:col-span-2"
           actions={
@@ -318,6 +614,7 @@ export function DashboardView() {
                     <th className="text-right font-medium">TP1 (pip)</th>
                     <th className="text-right font-medium">RR Net</th>
                     <th className="text-right font-medium">ADX</th>
+                    <th className="text-left font-medium">Stage</th>
                     <th className="text-right font-medium">P&L</th>
                   </tr>
                 </thead>
@@ -342,6 +639,9 @@ export function DashboardView() {
                       <td className="text-right tabular-nums text-bull">{t.tp1Pips.toFixed(1)}</td>
                       <td className="text-right tabular-nums font-semibold">{t.rrNet.toFixed(2)}</td>
                       <td className="text-right tabular-nums">{t.adxValue.toFixed(1)}</td>
+                      <td>
+                        <StageBadge trade={t} />
+                      </td>
                       <td
                         className={cn(
                           'text-right tabular-nums font-semibold',
@@ -570,3 +870,4 @@ function SessionTimeline() {
     </div>
   );
 }
+

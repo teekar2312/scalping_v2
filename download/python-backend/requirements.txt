@@ -12,7 +12,7 @@ python-multipart==0.0.17
 # MT5 integration (Windows-only)
 MetaTrader5==5.0.4512
 
-# HTTP clients (Ollama + Tiingo)
+# HTTP clients (Ollama + Tiingo + Telegram)
 httpx==0.27.2
 
 # Config + env
@@ -33,3 +33,11 @@ tzdata==2024.2
 
 # WebSocket
 websockets==13.1
+
+# ---- Audit-fix Sprint 4 new dependencies ---- #
+
+# PDF export for weekly trading journal
+reportlab==4.2.5
+
+# NTP time-sync drift check
+ntplib==0.4.0

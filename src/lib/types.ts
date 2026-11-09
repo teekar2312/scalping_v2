@@ -221,3 +221,301 @@ export interface Settings {
   pairs: string[];
   pythonApiUrl: string;
 }
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 1 #10: Audit log entries
+// --------------------------------------------------------------------------- //
+
+export type AuditEventType =
+  | 'SIGNAL'
+  | 'ORDER_PLACED'
+  | 'TP1_HIT'
+  | 'TP2_HIT'
+  | 'SL_HIT'
+  | 'KILL_SWITCH'
+  | 'RISK_GATE_BLOCKED'
+  | 'AI_REJECTED'
+  | 'CONNECTION_LOST'
+  | 'RECOVERY'
+  | 'COOLDOWN_ENGAGED'
+  | 'MARGIN_WARNING';
+
+export type AuditSeverity = 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
+
+export interface AuditLogEntry {
+  id: number;
+  timestamp: string;
+  event_type: string;
+  symbol?: string | null;
+  ticket?: number | null;
+  detail_json?: string | null;
+  detail?: Record<string, unknown> | null;
+  severity: string;
+}
+
+export interface AuditLogResponse {
+  count: number;
+  events: AuditLogEntry[];
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 3 #19: Equity curve time series
+// --------------------------------------------------------------------------- //
+
+export interface EquityCurvePoint {
+  id?: number;
+  timestamp: string;
+  balance: number;
+  equity: number;
+  floating_pnl: number;
+  daily_pnl_pct: number;
+  drawdown_pct: number;
+  peak_equity?: number | null;
+}
+
+export interface EquityCurveResponse {
+  count: number;
+  samples: EquityCurvePoint[];
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 3 #20-21: Performance attribution + compliance
+// --------------------------------------------------------------------------- //
+
+export interface SessionStats {
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  r_net: number;
+  profit: number;
+}
+
+export interface PerformanceAttribution {
+  by_session: Record<string, SessionStats>;
+  by_setup: Record<string, SessionStats>;
+  by_regime: Record<string, SessionStats>;
+  by_hour: Record<string, SessionStats>;
+  by_day: Record<string, SessionStats>;
+  by_pair: Record<string, SessionStats>;
+}
+
+export interface ComplianceScore {
+  overall_pct: number;
+  checklist_pass_rate: number;
+  rr_compliance_rate: number;
+  ai_compliance_rate: number;
+  total_trades: number;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 3 #22: Emotional-state logging
+// --------------------------------------------------------------------------- //
+
+export type EmotionalState = 'SABAR' | 'FOMO' | 'FRUSTRASI' | 'OVERCONFIDENT';
+
+export interface EmotionalSummaryResponse {
+  total_logged: number;
+  by_state: Record<string, number>;
+  trades: EmotionalTradeEntry[];
+}
+
+export interface EmotionalTradeEntry {
+  id: number;
+  ticket: number;
+  symbol: string;
+  emotional_state: string;
+  emotional_note?: string | null;
+  profit?: number | null;
+}
+
+export interface LogEmotionRequest {
+  state: EmotionalState;
+  note?: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #15: Pre-live checklist
+// --------------------------------------------------------------------------- //
+
+export interface PreLiveCheck {
+  mt5: { ok: boolean; login?: number; server?: string; balance?: number; message?: string };
+  ollama: { ok: boolean; model?: string; url?: string; message?: string };
+  tiingo: { ok: boolean; events_cached?: number; message?: string; warning?: string };
+  config: { ok: boolean; warnings: string[] };
+  db: { ok: boolean; trade_count?: number; message?: string };
+  time_sync: { ok: boolean; drift_seconds?: number; message?: string };
+  overall_ready: boolean;
+  blocking_issues: string[];
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 4 #27: Time sync (NTP drift)
+// --------------------------------------------------------------------------- //
+
+export interface TimeSyncResponse {
+  server_time: string;
+  ntp_time: string | null;
+  drift_seconds: number;
+  ok: boolean;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 4 #24: DB backup / restore
+// --------------------------------------------------------------------------- //
+
+export interface RestoreResponse {
+  ok: boolean;
+  restored_to: string;
+  size_bytes: number;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 4 #25-26: PDF / tax export
+// --------------------------------------------------------------------------- //
+
+export interface RiskDisclosureResponse {
+  text: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 4 #29-30: Real probes (test buttons)
+// --------------------------------------------------------------------------- //
+
+export interface ServiceTestResult {
+  ok: boolean;
+  message: string;
+  latency_ms: number;
+  balance?: number;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #11: Backtest
+// --------------------------------------------------------------------------- //
+
+export interface BacktestRequest {
+  symbol: string;
+  timeframe: string;
+  start_date: string;
+  end_date: string;
+  initial_balance?: number;
+}
+
+export interface BacktestTrade {
+  ticket?: number;
+  symbol: string;
+  direction: 'BUY' | 'SELL';
+  volume: number;
+  open_price: number;
+  close_price: number;
+  sl: number;
+  tp: number;
+  open_time: string;
+  close_time: string;
+  result: 'WIN' | 'LOSS' | 'BREAKEVEN';
+  r_multiple: number;
+  profit: number;
+  pips?: number;
+  setup_type?: string;
+  session?: string;
+}
+
+export interface BacktestResult {
+  id: number;
+  symbol: string;
+  timeframe: string;
+  start_date: string;
+  end_date: string;
+  initial_balance: number;
+  final_balance: number;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate_pct: number;
+  r_net_avg: number;
+  profit_factor: number;
+  max_drawdown_pct: number;
+  compliance_score_pct: number;
+  trades: BacktestTrade[];
+  metrics?: Record<string, number>;
+  created_at?: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #17: Holiday calendar
+// --------------------------------------------------------------------------- //
+
+export interface HolidayEntry {
+  date: string;
+  name: string;
+  country?: string;
+  closed?: boolean;
+}
+
+export interface HolidaysResponse {
+  year: number | null;
+  holidays: HolidayEntry[];
+}
+
+// --------------------------------------------------------------------------- //
+// Audit-fix Sprint 2 #12: Bot mode (LIVE / PAPER / DRY)
+// --------------------------------------------------------------------------- //
+
+export type BotMode = 'LIVE' | 'PAPER' | 'DRY';
+
+export interface BotModeState {
+  mode: string;
+  paper_mode: boolean;
+  dry_run: boolean;
+}
+
+// --------------------------------------------------------------------------- //
+// Streak / cooldown status (derived from bot state)
+// --------------------------------------------------------------------------- //
+
+export interface StreakStatus {
+  consecutive_losses: number;
+  consecutive_wins: number;
+  cooldown_active: boolean;
+  cooldown_until?: string | null;
+  cooldown_reason?: string | null;
+}
+
+// --------------------------------------------------------------------------- //
+// WebSocket events pushed by /ws
+// --------------------------------------------------------------------------- //
+
+export type WSEventType =
+  | 'status'
+  | 'signal'
+  | 'order_placed'
+  | 'position_closed'
+  | 'tp1_hit'
+  | 'tp2_hit'
+  | 'kill_switch_engaged'
+  | 'risk_gate_blocked'
+  | 'cooldown_engaged'
+  | 'margin_warning'
+  | 'tick'
+  | 'pong';
+
+export interface WSEvent<T = unknown> {
+  type: WSEventType;
+  data?: T;
+  symbol?: string;
+  bid?: number;
+  ask?: number;
+  spread?: number;
+  ts?: string;
+  reason?: string;
+  until?: string;
+  level?: number;
+  ticket?: number;
+}
+
+export interface TickPrice {
+  bid: number;
+  ask: number;
+  spread: number;
+  timestamp: string;
+}

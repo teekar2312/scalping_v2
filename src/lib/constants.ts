@@ -264,3 +264,50 @@ export const SESSION_GRID = [
   { session: 'SKIP', time: '17:00-19:30', days: ['SEN', 'SEL', 'RAB', 'KAM', 'JUM'] },
   { session: 'OVERLAP', time: '20:00-22:00', days: ['SEN', 'SEL', 'RAB', 'KAM', 'JUM'] },
 ];
+
+// Emotional states for post-trade logging (V2 Psikologi Scalper)
+export const EMOTIONAL_STATES = [
+  { value: 'SABAR', label: 'Sabar', color: '#10b981', description: 'Disiplin, ikut sistem' },
+  { value: 'FOMO', label: 'FOMO', color: '#f59e0b', description: 'Takut ketinggalan, kejar harga' },
+  { value: 'FRUSTRASI', label: 'Frustrasi', color: '#ef4444', description: 'Marah setelah loss, revenge' },
+  { value: 'OVERCONFIDENT', label: 'Overconfident', color: '#8b5cf6', description: 'PD berlebih setelah win' },
+] as const;
+
+// Audit event types with display color tokens
+export type AuditColorToken = 'info' | 'bull' | 'bear' | 'warn';
+
+export const AUDIT_EVENT_TYPES: { value: string; label: string; color: AuditColorToken }[] = [
+  { value: 'SIGNAL', label: 'Signal', color: 'info' },
+  { value: 'ORDER_PLACED', label: 'Order Placed', color: 'info' },
+  { value: 'TP1_HIT', label: 'TP1 Hit', color: 'bull' },
+  { value: 'TP2_HIT', label: 'TP2 Hit', color: 'bull' },
+  { value: 'SL_HIT', label: 'SL Hit', color: 'bear' },
+  { value: 'KILL_SWITCH', label: 'Kill Switch', color: 'bear' },
+  { value: 'RISK_GATE_BLOCKED', label: 'Risk Gate Blocked', color: 'warn' },
+  { value: 'AI_REJECTED', label: 'AI Rejected', color: 'warn' },
+  { value: 'CONNECTION_LOST', label: 'Connection Lost', color: 'bear' },
+  { value: 'RECOVERY', label: 'Recovery', color: 'info' },
+  { value: 'COOLDOWN_ENGAGED', label: 'Cooldown', color: 'warn' },
+  { value: 'MARGIN_WARNING', label: 'Margin Warning', color: 'bear' },
+];
+
+export const AUDIT_SEVERITIES: { value: string; label: string; color: AuditColorToken }[] = [
+  { value: 'INFO', label: 'Info', color: 'info' },
+  { value: 'WARN', label: 'Warn', color: 'warn' },
+  { value: 'ERROR', label: 'Error', color: 'bear' },
+  { value: 'CRITICAL', label: 'Critical', color: 'bear' },
+];
+
+// V2 Backtest mandatory targets (Roadmap 9 bulan F2)
+export const V2_BACKTEST_TARGETS = {
+  MIN_TRADES: 300,
+  WIN_RATE_PCT: 45,
+  PROFIT_FACTOR: 1.3,
+  MAX_DRAWDOWN_PCT: 8,
+  MIN_R_PER_TRADE: 0.15,
+  COMPLIANCE_SCORE_PCT: 90,
+} as const;
+
+// Backtest available presets
+export const BACKTEST_TIMEFRAMES = ['M5', 'M15', 'M30', 'H1'] as const;
+export const BACKTEST_SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY'] as const;

@@ -20,16 +20,53 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Literal
+from datetime import datetime, time, timedelta, timezone
+from typing import Any, Literal
 
 import config as cfg
 from config import settings
-from database import get_or_create_daily, update_daily, get_bot_state, update_bot_state
+from database import (
+    get_or_create_daily, update_daily, get_bot_state, update_bot_state,
+    list_open_trades,
+)
 
 logger = logging.getLogger(__name__)
 
 StopLevel = Literal["none", "soft", "hard", "weekly", "overall"]
+
+
+# --------------------------------------------------------------------------- #
+# WIB timezone for cooldown end-of-day calc
+# --------------------------------------------------------------------------- #
+
+try:
+    from zoneinfo import ZoneInfo
+    _WIB = ZoneInfo(settings.timezone)
+except Exception:  # pragma: no cover
+    _WIB = timezone.utc
+
+
+def _cooldown_until_for_streak(streak: int,
+                               now_utc: datetime | None = None) -> datetime | None:
+    """Compute the cooldown end-time for a given loss streak.
+
+    * streak >= 3 -> end of WIB day (23:59:59 local)
+    * streak >= 2 -> now + 30 minutes
+    * otherwise   -> None
+    """
+    if streak < 2:
+        return None
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    if streak >= 3:
+        now_wib = now_utc.astimezone(_WIB)
+        # End of today (WIB) at 23:59:59
+        end_of_day_wib = datetime.combine(
+            now_wib.date(), time(23, 59, 59),
+        ).replace(tzinfo=_WIB)
+        return end_of_day_wib.astimezone(timezone.utc)
+    # streak == 2
+    return now_utc + timedelta(minutes=30)
 
 
 # --------------------------------------------------------------------------- #
@@ -154,10 +191,15 @@ class DailyRiskState:
     loss_count: int
     soft_stop_hit: bool
     hard_stop_hit: bool
+    consecutive_loss_count: int = 0
+    consecutive_win_count: int = 0
+    cooldown_until: str | None = None
+    last_loss_time: str | None = None
+    last_win_time: str | None = None
 
 
 class DailyRiskTracker:
-    """Track daily PnL, trade count and win/loss."""
+    """Track daily PnL, trade count and win/loss streaks."""
 
     def __init__(self) -> None:
         self.tiered = TieredStop()
@@ -191,24 +233,168 @@ class DailyRiskTracker:
             loss_count=raw["loss_count"],
             soft_stop_hit=raw["soft_stop_hit"],
             hard_stop_hit=raw["hard_stop_hit"],
+            consecutive_loss_count=raw.get("consecutive_loss_count", 0),
+            consecutive_win_count=raw.get("consecutive_win_count", 0),
+            cooldown_until=raw.get("cooldown_until"),
+            last_loss_time=raw.get("last_loss_time"),
+            last_win_time=raw.get("last_win_time"),
         )
 
     def record_trade(self, pnl: float, win: bool) -> DailyRiskState:
-        """Record a closed trade's PnL and update counts."""
+        """Record a closed trade's PnL and update counts + streak + cooldown.
+
+        Streak rules:
+            * Loss -> ``consecutive_loss_count`` +1, reset wins
+            * Win  -> ``consecutive_win_count`` +1, reset losses
+            * 2 losses -> 30-minute cooldown (UTC)
+            * 3+ losses -> cooldown until end of WIB day (23:59:59 local)
+        """
         state = self.get_state()
         new_realized = state.realized_pnl + pnl
         new_count = state.trade_count + 1
         new_wins = state.win_count + (1 if win else 0)
         new_losses = state.loss_count + (0 if win else 1)
-        update_daily(
-            state.date,
-            realized_pnl=new_realized,
-            trade_count=new_count,
-            win_count=new_wins,
-            loss_count=new_losses,
-            current_balance=state.starting_balance + new_realized,
-        )
+
+        now_utc = datetime.now(timezone.utc)
+        if win:
+            new_streak_loss = 0
+            new_streak_win = state.consecutive_win_count + 1
+            update_fields: dict[str, Any] = {
+                "realized_pnl": new_realized,
+                "trade_count": new_count,
+                "win_count": new_wins,
+                "loss_count": new_losses,
+                "current_balance": state.starting_balance + new_realized,
+                "consecutive_loss_count": 0,
+                "consecutive_win_count": new_streak_win,
+                "last_win_time": now_utc,
+            }
+        else:
+            new_streak_loss = state.consecutive_loss_count + 1
+            update_fields = {
+                "realized_pnl": new_realized,
+                "trade_count": new_count,
+                "win_count": new_wins,
+                "loss_count": new_losses,
+                "current_balance": state.starting_balance + new_realized,
+                "consecutive_loss_count": new_streak_loss,
+                "consecutive_win_count": 0,
+                "last_loss_time": now_utc,
+            }
+            cooldown = _cooldown_until_for_streak(new_streak_loss, now_utc)
+            if cooldown is not None:
+                update_fields["cooldown_until"] = cooldown
+                logger.warning(
+                    "Cooldown engaged: %d losses in a row, until %s UTC",
+                    new_streak_loss, cooldown.isoformat(),
+                )
+
+        update_daily(state.date, **update_fields)
         return self.get_state()
+
+    def get_streak_status(self) -> dict[str, Any]:
+        """Return a streak + cooldown summary for /api/status."""
+        state = self.get_state()
+        now_utc = datetime.now(timezone.utc)
+        cooldown_str = state.cooldown_until
+        cooldown_active = False
+        if cooldown_str:
+            try:
+                cd_dt = datetime.fromisoformat(cooldown_str.replace("Z", "+00:00"))
+                if cd_dt.tzinfo is None:
+                    cd_dt = cd_dt.replace(tzinfo=timezone.utc)
+                cooldown_active = cd_dt > now_utc
+            except ValueError:
+                cooldown_active = False
+        return {
+            "consecutive_losses": state.consecutive_loss_count,
+            "consecutive_wins": state.consecutive_win_count,
+            "cooldown_active": cooldown_active,
+            "cooldown_until": cooldown_str,
+            "last_loss_time": state.last_loss_time,
+            "last_win_time": state.last_win_time,
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Correlation check (audit-fix Sprint 1 #6)
+# --------------------------------------------------------------------------- #
+
+# Each FX pair is decomposed into two currency legs.  For a BUY, the trader
+# is long the base and short the quote; for a SELL the reverse.
+def _split_pair(symbol: str) -> tuple[str, str]:
+    sym = symbol.upper().replace("/", "")
+    if len(sym) != 6:
+        return ("", "")
+    return (sym[:3], sym[3:])
+
+
+def check_correlation(new_symbol: str,
+                      direction: str,
+                      open_positions: list[dict[str, Any]]
+                      ) -> dict[str, Any]:
+    """Block a new trade if it pushes a single currency's exposure too high.
+
+    Rules
+    -----
+    * A BUY on EURUSD => +1 EUR, -1 USD
+    * A SELL on EURUSD => -1 EUR, +1 USD
+    * If any currency already has 2 open positions on the same side, the new
+      trade is blocked (max 2 correlated positions per currency leg).
+
+    Returns
+    -------
+    dict
+        ``{"allowed": bool, "reason": str, "current_exposure": dict}``
+    """
+    base, quote = _split_pair(new_symbol)
+    if not base:
+        return {"allowed": True, "reason": "ok",
+                "current_exposure": {}}
+    is_buy = direction.lower() == "buy"
+
+    # Build exposure map: currency -> signed net position count
+    exposure: dict[str, int] = {}
+    for p in open_positions:
+        sym = p.get("symbol") or ""
+        pdir = (p.get("direction") or p.get("type") or "").lower()
+        b, q = _split_pair(sym)
+        if not b:
+            continue
+        if pdir == "buy":
+            exposure[b] = exposure.get(b, 0) + 1
+            exposure[q] = exposure.get(q, 0) - 1
+        else:
+            exposure[b] = exposure.get(b, 0) - 1
+            exposure[q] = exposure.get(q, 0) + 1
+
+    # Apply the candidate trade
+    new_long_ccy = base if is_buy else quote
+    new_short_ccy = quote if is_buy else base
+    projected_long = exposure.get(new_long_ccy, 0) + 1
+    projected_short = exposure.get(new_short_ccy, 0) - 1
+
+    reason = "ok"
+    allowed = True
+    # If the new trade pushes any single currency beyond 2 positions on the
+    # same side, block it.
+    if abs(projected_long) > 2:
+        allowed = False
+        reason = (f"Correlation block: {new_long_ccy} would have "
+                  f"{projected_long:+d} net long positions (max 2)")
+    elif abs(projected_short) > 2:
+        allowed = False
+        reason = (f"Correlation block: {new_short_ccy} would have "
+                  f"{projected_short:+d} net short positions (max 2)")
+
+    exposure_out = {k: v for k, v in exposure.items()}
+    exposure_out[new_long_ccy] = projected_long
+    exposure_out[new_short_ccy] = projected_short
+    return {
+        "allowed": allowed,
+        "reason": reason,
+        "current_exposure": exposure_out,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -301,8 +487,19 @@ def evaluate_risk_gate(current_positions: int,
                        daily_state: DailyRiskState,
                        weekly_start: float,
                        overall_start: float,
-                       current_balance: float) -> RiskGate:
-    """Run all risk checks at once and return a gate decision."""
+                       current_balance: float,
+                       new_symbol: str | None = None,
+                       new_direction: str | None = None,
+                       open_positions: list[dict[str, Any]] | None = None
+                       ) -> RiskGate:
+    """Run all risk checks at once and return a gate decision.
+
+    Parameters
+    ----------
+    new_symbol, new_direction, open_positions
+        Optional - if all three are provided, the correlation check is
+        applied to the candidate trade.
+    """
     tiered = TieredStop()
     stop = tiered.evaluate(
         current_balance=current_balance,
@@ -330,6 +527,28 @@ def evaluate_risk_gate(current_positions: int,
     if daily_state.hard_stop_hit:
         reasons.append("hard_stop_hit")
 
+    # Cooldown check (audit-fix Sprint 1 #5)
+    streak = (daily_state.consecutive_loss_count or 0)
+    cooldown_str = daily_state.cooldown_until
+    if cooldown_str:
+        try:
+            cd_dt = datetime.fromisoformat(cooldown_str.replace("Z", "+00:00"))
+            if cd_dt.tzinfo is None:
+                cd_dt = cd_dt.replace(tzinfo=timezone.utc)
+            if cd_dt > datetime.now(timezone.utc):
+                reasons.append(
+                    f"cooldown_active - {streak} loss beruntun, tunggu sampai "
+                    f"{cd_dt.strftime('%H:%M')} UTC"
+                )
+        except ValueError:
+            pass
+
+    # Correlation check (audit-fix Sprint 1 #6)
+    if (new_symbol and new_direction and open_positions is not None):
+        corr = check_correlation(new_symbol, new_direction, open_positions)
+        if not corr["allowed"]:
+            reasons.append(corr["reason"])
+
     allow = (len(reasons) == 0)
     return RiskGate(
         allow_new_entry=allow,
@@ -348,5 +567,5 @@ __all__ = [
     "enforce_max_positions", "enforce_max_daily_trades",
     "check_kill_switch", "lock_bot", "unlock_bot",
     "engage_kill_switch", "release_kill_switch",
-    "evaluate_risk_gate",
+    "evaluate_risk_gate", "check_correlation",
 ]
