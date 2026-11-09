@@ -52,6 +52,24 @@ import type {
   BappebtiStatus,
   EncryptionStatus,
   VaRMethod,
+  PriceAlert,
+  PriceAlertCreateRequest,
+  PriceAlertType,
+  PriceAlertNotifyMethod,
+  SystemInfoResponse,
+  ServiceStatusResponse,
+  DrawdownRealtimeResponse,
+  CurrencyStrengthResponse,
+  VolumeProfileResponse,
+  CorrelationMatrixResponse,
+  VolatilitySurfaceResponse,
+  OrderFlowResponse,
+  NewsSentimentResponse,
+  SurpriseIndexResponse,
+  BrokerStatusResponse,
+  SwapsReportResponse,
+  TickBacktestRequest,
+  TickBacktestResult,
 } from './types';
 import {
   PRE_TRADE_CHECKLIST,
@@ -1454,5 +1472,416 @@ export function getDemoHealthz(): HealthzResponse {
     status: 'healthy',
     uptime_seconds: 142_873,
     version: '2.0.0',
+  };
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100 — Demo data for new endpoints
+// --------------------------------------------------------------------------- //
+
+export function getDemoPriceAlerts(): PriceAlert[] {
+  return [
+    {
+      id: 'alert_eurusd_above',
+      type: 'PRICE_ABOVE',
+      symbol: 'EURUSD',
+      threshold: 1.092,
+      notify_method: 'BOTH',
+      active: true,
+      note: 'Resistance test — breakout candidate',
+      last_triggered: null,
+      trigger_count: 0,
+      created_at: new Date(Date.now() - 3 * 86400_000).toISOString(),
+      updated_at: new Date(Date.now() - 3 * 86400_000).toISOString(),
+    },
+    {
+      id: 'alert_gbpusd_below',
+      type: 'PRICE_BELOW',
+      symbol: 'GBPUSD',
+      threshold: 1.262,
+      notify_method: 'BROWSER',
+      active: true,
+      note: 'Support break — short setup',
+      last_triggered: new Date(Date.now() - 6 * 3600_000).toISOString(),
+      trigger_count: 1,
+      created_at: new Date(Date.now() - 5 * 86400_000).toISOString(),
+      updated_at: new Date(Date.now() - 6 * 3600_000).toISOString(),
+    },
+    {
+      id: 'alert_usdjpy_adx',
+      type: 'ADX_CROSS_UP',
+      symbol: 'USDJPY',
+      threshold: 25,
+      notify_method: 'TELEGRAM',
+      active: true,
+      note: 'Trending regime — start scanning',
+      last_triggered: null,
+      trigger_count: 0,
+      created_at: new Date(Date.now() - 1 * 86400_000).toISOString(),
+      updated_at: new Date(Date.now() - 1 * 86400_000).toISOString(),
+    },
+    {
+      id: 'alert_eurusd_rsi_ob',
+      type: 'RSI_OVERBOUGHT',
+      symbol: 'EURUSD',
+      threshold: 70,
+      notify_method: 'BOTH',
+      active: false,
+      note: 'Reversal warning (paused)',
+      last_triggered: new Date(Date.now() - 14 * 3600_000).toISOString(),
+      trigger_count: 3,
+      created_at: new Date(Date.now() - 12 * 86400_000).toISOString(),
+      updated_at: new Date(Date.now() - 14 * 3600_000).toISOString(),
+    },
+  ];
+}
+
+export function getDemoCreatePriceAlert(body: PriceAlertCreateRequest): PriceAlert {
+  return {
+    id: `alert_${Math.random().toString(36).slice(2, 12)}`,
+    type: body.type,
+    symbol: body.symbol,
+    threshold: body.threshold,
+    notify_method: body.notify_method,
+    active: body.active ?? true,
+    note: body.note ?? null,
+    last_triggered: null,
+    trigger_count: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoSystemInfo(): SystemInfoResponse {
+  return {
+    python_version: '3.14.0',
+    os: 'Windows 11 10.0.22631',
+    hostname: 'SCALPING-V2-WIN',
+    cpu_count: 8,
+    cpu_percent: 18.4,
+    memory_total_bytes: 16_374_256_640,
+    memory_used_bytes: 5_242_880_000,
+    memory_percent: 32.0,
+    disk_total_bytes: 512_000_000_000,
+    disk_used_bytes: 218_000_000_000,
+    disk_percent: 42.6,
+    uptime_seconds: 142_873,
+    active_db_connections: 4,
+    boot_time: new Date(Date.now() - 142_873_000).toISOString(),
+    process_id: 12_484,
+  };
+}
+
+export function getDemoServiceStatus(): ServiceStatusResponse {
+  return {
+    services: [
+      { name: 'MT5 Connection', ok: true, latency_ms: 142, detail: 'connected as 50384721 @ FinexIC-Markets' },
+      { name: 'SQLite Database', ok: true, latency_ms: 3, detail: '1247 audit rows · SQLCipher AES-256' },
+      { name: 'Ollama AI', ok: true, latency_ms: 38, detail: 'llama3.2:latest @ http://localhost:11434' },
+      { name: 'Tiingo Calendar', ok: true, latency_ms: 215, detail: '8 HIGH events cached · next refresh in 12m' },
+      { name: 'Telegram Bot', ok: true, latency_ms: 89, detail: '@scalping_v2_bot → chat 50384721' },
+      { name: 'WebSocket Hub', ok: true, latency_ms: 1, detail: '3 clients connected' },
+    ],
+    checked_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoDrawdownRealtime(): DrawdownRealtimeResponse {
+  return {
+    current_drawdown_pct: -1.42,
+    max_drawdown_pct_24h: -2.18,
+    peak_equity: 10_124.5,
+    current_equity: 9_981.2,
+    trough_equity_24h: 9_903.4,
+    recovered: false,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoMetrics(): string {
+  return `# HELP scalping_v2_bot_total_trades Total trades since bot start.
+# TYPE scalping_v2_bot_total_trades counter
+scalping_v2_bot_total_trades 412
+# HELP scalping_v2_bot_uptime_seconds Uptime in seconds.
+# TYPE scalping_v2_bot_uptime_seconds gauge
+scalping_v2_bot_uptime_seconds 142873
+# HELP scalping_v2_http_request_duration_seconds HTTP request latency.
+# TYPE scalping_v2_http_request_duration_seconds histogram
+scalping_v2_http_request_duration_seconds_bucket{le="0.05"} 1840
+scalping_v2_http_request_duration_seconds_bucket{le="0.1"} 2412
+scalping_v2_http_request_duration_seconds_bucket{le="0.5"} 2984
+scalping_v2_http_request_duration_seconds_bucket{le="1"} 3012
+scalping_v2_http_request_duration_seconds_bucket{le="+Inf"} 3034
+# HELP scalping_v2_active_positions Current open positions.
+# TYPE scalping_v2_active_positions gauge
+scalping_v2_active_positions 2
+# HELP scalping_v2_equity Current account equity.
+# TYPE scalping_v2_equity gauge
+scalping_v2_equity 9981.20
+`;
+}
+
+export function getDemoCurrencyStrength(): CurrencyStrengthResponse {
+  const base: Array<{ c: string; s: number; ch: number }> = [
+    { c: 'USD', s: 78, ch: 2.4 },
+    { c: 'EUR', s: -32, ch: -1.2 },
+    { c: 'GBP', s: 18, ch: 0.8 },
+    { c: 'JPY', s: -58, ch: -3.1 },
+    { c: 'CHF', s: 12, ch: 0.4 },
+    { c: 'AUD', s: -22, ch: -0.9 },
+    { c: 'CAD', s: 8, ch: 0.3 },
+    { c: 'NZD', s: -4, ch: 0.1 },
+  ];
+  const sorted = base.slice().sort((a, b) => b.s - a.s);
+  return {
+    timestamp: new Date().toISOString(),
+    currencies: sorted.map((x, idx) => ({
+      currency: x.c,
+      strength: x.s,
+      rank: idx + 1,
+      change_24h: x.ch,
+    })),
+  };
+}
+
+export function getDemoVolumeProfile(symbol: string): VolumeProfileResponse {
+  const base = symbol === 'USDJPY' ? 151.45 : 1.0853;
+  const decimals = symbol === 'USDJPY' ? 2 : 4;
+  const step = symbol === 'USDJPY' ? 0.05 : 0.0005;
+  const levels: VolumeProfileResponse['levels'] = [];
+  const pocIdx = 12;
+  for (let i = 0; i < 25; i++) {
+    const price = parseFloat((base + (i - 12) * step).toFixed(decimals));
+    // Bell-ish curve peaked around POC.
+    const vol = Math.round(800 * Math.exp(-Math.pow(i - pocIdx, 2) / 30) + 80);
+    const inValueArea = Math.abs(i - pocIdx) <= 6;
+    levels.push({
+      price,
+      volume: vol,
+      is_poc: i === pocIdx,
+      in_value_area: inValueArea,
+    });
+  }
+  const pocPrice = levels[pocIdx].price;
+  const vahPrice = levels[pocIdx + 6].price;
+  const valPrice = levels[pocIdx - 6].price;
+  const totalVolume = levels.reduce((a, b) => a + b.volume, 0);
+  return {
+    symbol,
+    levels,
+    poc_price: pocPrice,
+    vah_price: vahPrice,
+    val_price: valPrice,
+    total_volume: totalVolume,
+    value_area_volume_pct: 0.7,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoCorrelationMatrix(
+  pairs: string[],
+  _window: number,
+): CorrelationMatrixResponse {
+  const n = pairs.length;
+  const matrix: number[][] = Array.from({ length: n }, (_, i) =>
+    Array.from({ length: n }, (_, j) => {
+      if (i === j) return 1;
+      // Deterministic pseudo-correlation: EURUSD & USDCHF strong inverse,
+      // AUDUSD & USDCAD mild inverse, GBPUSD & EURUSD positive.
+      const a = pairs[i];
+      const b = pairs[j];
+      if (a === 'EURUSD' && b === 'USDCHF') return -0.92;
+      if (a === 'USDCHF' && b === 'EURUSD') return -0.92;
+      if (a === 'AUDUSD' && b === 'USDCAD') return -0.61;
+      if (a === 'USDCAD' && b === 'AUDUSD') return -0.61;
+      if (a === 'EURUSD' && b === 'GBPUSD') return 0.78;
+      if (a === 'GBPUSD' && b === 'EURUSD') return 0.78;
+      if (a === 'USDJPY' && b === 'EURUSD') return -0.34;
+      if (a === 'EURUSD' && b === 'USDJPY') return -0.34;
+      // fallback deterministic value
+      const seed = (i * 7 + j * 13) % 100;
+      return parseFloat(((seed - 50) / 100).toFixed(2));
+    })
+  );
+  return {
+    pairs,
+    window_days: _window,
+    matrix,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoVolatilitySurface(symbol: string): VolatilitySurfaceResponse {
+  const base = symbol === 'USDJPY' ? 8.4 : symbol === 'GBPUSD' ? 10.2 : 7.6;
+  const tenors = ['1D', '5D', '10D', '20D', '60D'];
+  return {
+    symbol,
+    tenors: tenors.map((t, idx) => {
+      const scale = 1 + idx * 0.18;
+      const v = base * scale * (0.9 + Math.sin(idx) * 0.1);
+      return {
+        tenor: t,
+        volatility_pct: parseFloat(v.toFixed(2)),
+        annualized_pct: parseFloat((v * Math.sqrt(252 / Math.max(1, idx + 1))).toFixed(2)),
+      };
+    }),
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoOrderFlow(symbol: string): OrderFlowResponse {
+  // L2 depth not supported in demo — return levels with a note.
+  const base = symbol === 'USDJPY' ? 151.45 : 1.0853;
+  const decimals = symbol === 'USDJPY' ? 2 : 4;
+  const step = symbol === 'USDJPY' ? 0.01 : 0.0001;
+  const levels: OrderFlowResponse['levels'] = [];
+  for (let i = -5; i <= 5; i++) {
+    const price = parseFloat((base + i * step).toFixed(decimals));
+    const bidVol = Math.round(120 + Math.random() * 80 + (i < 0 ? 60 : 0));
+    const askVol = Math.round(120 + Math.random() * 80 + (i > 0 ? 60 : 0));
+    levels.push({
+      price,
+      bid_volume: bidVol,
+      ask_volume: askVol,
+      imbalance: parseFloat(((askVol - bidVol) / (askVol + bidVol)).toFixed(2)),
+    });
+  }
+  return {
+    symbol,
+    supported: false,
+    levels,
+    total_bid_volume: levels.reduce((a, b) => a + b.bid_volume, 0),
+    total_ask_volume: levels.reduce((a, b) => a + b.ask_volume, 0),
+    note: 'L2 market depth not available in demo mode. Connect MT5 broker with Level-2 subscription to enable order-flow analytics.',
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoNewsSentiment(): NewsSentimentResponse {
+  const now = Date.now();
+  const items = [
+    {
+      id: 'ns1',
+      title: 'EUR/USD breaks 1.092 resistance on hawkish ECB minutes',
+      source: 'Reuters',
+      published_at: new Date(now - 2 * 3600_000).toISOString(),
+      sentiment: 'BULLISH' as const,
+      confidence: 0.82,
+      affected_currencies: ['EUR', 'USD'],
+      url: 'https://example.com/news/eurusd-resistance-break',
+    },
+    {
+      id: 'ns2',
+      title: 'US CPI prints hotter than expected — dollar extends gains',
+      source: 'Bloomberg',
+      published_at: new Date(now - 4 * 3600_000).toISOString(),
+      sentiment: 'BEARISH' as const,
+      confidence: 0.71,
+      affected_currencies: ['USD', 'EUR', 'GBP'],
+    },
+    {
+      id: 'ns3',
+      title: 'BoJ governor signals patience on rate hikes — JPY softens',
+      source: 'NHK',
+      published_at: new Date(now - 7 * 3600_000).toISOString(),
+      sentiment: 'BEARISH' as const,
+      confidence: 0.64,
+      affected_currencies: ['JPY', 'USD'],
+    },
+    {
+      id: 'ns4',
+      title: 'UK GDP in line with forecast — pound muted',
+      source: 'FT',
+      published_at: new Date(now - 10 * 3600_000).toISOString(),
+      sentiment: 'NEUTRAL' as const,
+      confidence: 0.55,
+      affected_currencies: ['GBP'],
+    },
+    {
+      id: 'ns5',
+      title: 'Risk sentiment improves as equity markets rally',
+      source: 'CNBC',
+      published_at: new Date(now - 14 * 3600_000).toISOString(),
+      sentiment: 'BULLISH' as const,
+      confidence: 0.58,
+      affected_currencies: ['AUD', 'CAD', 'NZD'],
+    },
+  ];
+  return {
+    items,
+    total: items.length,
+    fetched_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoSurpriseIndex(days: number): SurpriseIndexResponse {
+  const entries = [
+    { c: 'USD', actual: 0.31, forecast: 0.28, previous: 0.29, count: 8 },
+    { c: 'EUR', actual: -0.12, forecast: 0.05, previous: -0.08, count: 6 },
+    { c: 'GBP', actual: 0.18, forecast: 0.15, previous: 0.12, count: 5 },
+    { c: 'JPY', actual: 0.42, forecast: 0.30, previous: 0.35, count: 4 },
+    { c: 'AUD', actual: -0.05, forecast: 0.10, previous: 0.02, count: 3 },
+    { c: 'CAD', actual: 0.22, forecast: 0.20, previous: 0.18, count: 3 },
+    { c: 'CHF', actual: 0.08, forecast: 0.10, previous: 0.06, count: 2 },
+  ];
+  return {
+    days,
+    entries: entries.map((e) => ({
+      currency: e.c,
+      actual: e.actual,
+      forecast: e.forecast,
+      previous: e.previous,
+      events_count: e.count,
+      surprise_score: parseFloat(
+        (((e.actual - e.forecast) / Math.abs(e.forecast || 0.01)) * 100).toFixed(1)
+      ),
+    })),
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoBrokerStatus(): BrokerStatusResponse {
+  return {
+    mt5_connected: true,
+    mt5_login: 50384721,
+    mt5_server: 'FinexIC-Markets',
+    ollama_connected: true,
+    ollama_model: 'llama3.2:latest',
+    tiingo_connected: true,
+    primary: 'mt5',
+    failover_active: false,
+    failover_reason: null,
+    last_check: new Date().toISOString(),
+  };
+}
+
+export function getDemoSwapsReport(): SwapsReportResponse {
+  return {
+    entries: [
+      { symbol: 'EURUSD', swap_long: -1.42, swap_short: 0.78, swap_long_pips: -0.142, swap_short_pips: 0.078, currency: 'USD', source: 'mt5' },
+      { symbol: 'GBPUSD', swap_long: -1.85, swap_short: 0.92, swap_long_pips: -0.185, swap_short_pips: 0.092, currency: 'USD', source: 'mt5' },
+      { symbol: 'USDJPY', swap_long: -0.62, swap_short: 0.41, swap_long_pips: -0.062, swap_short_pips: 0.041, currency: 'JPY', source: 'mt5' },
+      { symbol: 'USDCHF', swap_long: -0.34, swap_short: 0.18, swap_long_pips: -0.034, swap_short_pips: 0.018, currency: 'CHF', source: 'mt5' },
+      { symbol: 'AUDUSD', swap_long: 0.52, swap_short: -0.82, swap_long_pips: 0.052, swap_short_pips: -0.082, currency: 'USD', source: 'mt5' },
+      { symbol: 'USDCAD', swap_long: -0.92, swap_short: 0.36, swap_long_pips: -0.092, swap_short_pips: 0.036, currency: 'CAD', source: 'mt5' },
+    ],
+    total: 6,
+    generated_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoTickBacktest(body: TickBacktestRequest): TickBacktestResult {
+  return {
+    id: `tick_${Math.random().toString(36).slice(2, 12)}`,
+    symbol: body.symbol,
+    total_ticks: 184_250,
+    trades: 47,
+    wins: 22,
+    losses: 25,
+    final_balance: (body.initial_balance ?? 10000) * 1.084,
+    max_drawdown_pct: 4.2,
+    profit_factor: 1.32,
+    duration_seconds: 18.4,
+    computed_at: new Date().toISOString(),
   };
 }

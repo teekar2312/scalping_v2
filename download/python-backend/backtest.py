@@ -465,6 +465,8 @@ __all__ = [
     "load_candles_from_csv",
     "MonteCarloEngine", "MonteCarloResult",
     "WalkForwardAnalyzer", "WalkForwardResult",
+    # BACKEND-100 #9
+    "TickBacktestEngine",
 ]
 
 
@@ -694,3 +696,348 @@ class WalkForwardAnalyzer:
             windows=windows,
             avg_degradation_pct=round(avg_deg, 2),
         )
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #9: tick-level backtest engine
+# --------------------------------------------------------------------------- #
+
+class TickBacktestEngine(BacktestEngine):
+    """Tick-driven backtest engine (more accurate than candle-close).
+
+    Subclass of :class:`BacktestEngine` that overrides the candle-driven
+    trade advancement with a tick-aware version: SL / TP / trailing stops
+    are checked against each tick's bid/ask within the candle window, so
+    intra-candle fills are detected (vs only candle-close outcomes in the
+    parent class).
+
+    Tick data is supplied as a list of dicts with at minimum ``time``
+    (epoch seconds), ``bid`` and ``ask``.  When real MT5 tick data is
+    unavailable (e.g. during unit tests) synthetic ticks can be generated
+    from candle OHLC via :meth:`ticks_from_candles`.
+    """
+
+    def __init__(self,
+                 spread_pips: float = 0.8,
+                 commission_pips: float = 0.7,
+                 *,
+                 slippage_pips: float = 0.0) -> None:
+        super().__init__(spread_pips=spread_pips,
+                         commission_pips=commission_pips)
+        # Additional slippage applied on entry/exit (in pips).
+        self.slippage_pips = float(slippage_pips)
+
+    # ---- tick generation --------------------------------------------------- #
+
+    @staticmethod
+    def ticks_from_candles(candles: list[dict[str, Any]],
+                           *,
+                           pip_size: float = 0.0001,
+                           spread_pips: float = 0.8,
+                           ticks_per_candle: int = 5
+                           ) -> list[dict[str, Any]]:
+        """Synthesise intra-candle ticks from OHLC bars.
+
+        Generates ``ticks_per_candle`` evenly-spaced ticks between the
+        candle's open and close, perturbed to touch the candle's high and
+        low.  Useful when real L1 ticks aren't available (e.g. tests).
+
+        Returns a list of ``{"time", "bid", "ask"}`` dicts sorted by time.
+        """
+        if not candles:
+            return []
+        spread = spread_pips * pip_size
+        out: list[dict[str, Any]] = []
+        for c in candles:
+            try:
+                t = float(c.get("time") or 0)
+                o = float(c.get("open") or 0)
+                h = float(c.get("high") or o)
+                lo = float(c.get("low") or o)
+                cl = float(c.get("close") or o)
+            except Exception:
+                continue
+            if o <= 0:
+                continue
+            # Piecewise: open -> high -> low -> close over the candle span.
+            n = max(2, int(ticks_per_candle))
+            for i in range(n):
+                frac = i / (n - 1) if n > 1 else 0.0
+                if frac <= 1.0 / 3.0:
+                    local = frac * 3.0
+                    price = o + (h - o) * local
+                elif frac <= 2.0 / 3.0:
+                    local = (frac - 1.0 / 3.0) * 3.0
+                    price = h + (lo - h) * local
+                else:
+                    local = (frac - 2.0 / 3.0) * 3.0
+                    price = lo + (cl - lo) * local
+                out.append({
+                    "time": t + frac * 60.0,
+                    "bid": price,
+                    "ask": price + spread,
+                })
+        out.sort(key=lambda x: x["time"])
+        return out
+
+    # ---- main entry -------------------------------------------------------- #
+
+    def run_tick_backtest(self,
+                          symbol: str,
+                          start_date: str,
+                          end_date: str,
+                          initial_balance: float = 10_000.0,
+                          candles_m5: list[dict[str, Any]] | None = None,
+                          candles_m15: list[dict[str, Any]] | None = None,
+                          ticks: list[dict[str, Any]] | None = None,
+                          ) -> BacktestResult:
+        """Run a tick-driven backtest.
+
+        Either supply ``ticks`` directly (list of ``{time, bid, ask}``
+        dicts) or ``candles_m5`` from which ticks are synthesised.
+        """
+        check_setup, _candles_from_bars, WIB_TZ, Candle, _ = _load_strategy()
+
+        if candles_m5 is None and ticks is None:
+            return BacktestResult(
+                symbol=symbol, timeframe="TICK",
+                start_date=start_date, end_date=end_date,
+                initial_balance=initial_balance,
+                final_balance=initial_balance,
+            )
+        if candles_m15 is None and candles_m5:
+            candles_m15 = candles_m5[::3]
+
+        if not candles_m5 or len(candles_m5) < 50:
+            return BacktestResult(
+                symbol=symbol, timeframe="TICK",
+                start_date=start_date, end_date=end_date,
+                initial_balance=initial_balance,
+                final_balance=initial_balance,
+            )
+
+        last_close = float(candles_m5[-1].get("close") or 0.0)
+        pip_size = 0.01 if last_close > 100 else 0.0001
+
+        if ticks is None:
+            ticks = self.ticks_from_candles(
+                candles_m5, pip_size=pip_size,
+                spread_pips=self.spread_pips,
+                ticks_per_candle=6,
+            )
+        if not ticks:
+            return BacktestResult(
+                symbol=symbol, timeframe="TICK",
+                start_date=start_date, end_date=end_date,
+                initial_balance=initial_balance,
+                final_balance=initial_balance,
+            )
+
+        m5_candles = [Candle(**c) for c in candles_m5]
+        m15_candles = [Candle(**c) for c in candles_m15] if candles_m15 \
+            else m5_candles[::3]
+
+        balance = float(initial_balance)
+        peak = balance
+        max_dd_pct = 0.0
+        trades: list[BacktestTrade] = []
+        open_trade: dict[str, Any] | None = None
+
+        window_m5 = 200
+        window_m15 = 200
+        news_events: list[dict[str, Any]] = []
+        candle_idx = window_m5
+        last_candle_checked = window_m5 - 1
+
+        for tick in ticks:
+            t_time = float(tick.get("time") or 0)
+            while (candle_idx < len(m5_candles)
+                   and m5_candles[candle_idx].time <= t_time):
+                candle_idx += 1
+            if candle_idx < window_m5:
+                continue
+            current_close = float(tick.get("bid") or 0.0)
+            if current_close <= 0:
+                continue
+
+            # ---- Manage open trade on the tick -------------------------- #
+            if open_trade is not None:
+                self._advance_trade_tick(open_trade, tick)
+                if open_trade.get("closed"):
+                    trades.append(self._finalize_trade(open_trade, balance))
+                    balance += trades[-1].profit
+                    if balance > peak:
+                        peak = balance
+                    dd = ((peak - balance) / peak * 100.0) \
+                        if peak > 0 else 0.0
+                    if dd > max_dd_pct:
+                        max_dd_pct = dd
+                    open_trade = None
+
+            if open_trade is not None:
+                continue
+
+            # ---- Run strategy check once per newly-closed candle -------- #
+            if candle_idx <= last_candle_checked + 1:
+                continue
+            last_candle_checked = candle_idx - 1
+            slc_m5 = m5_candles[max(0, candle_idx - window_m5): candle_idx]
+            if len(slc_m5) < window_m5:
+                continue
+            just_closed = m5_candles[candle_idx - 1]
+            slc_m15 = m15_candles[-window_m15:] if len(m15_candles) >= window_m15 \
+                else m15_candles
+            sym_info = self._build_symbol_info(just_closed.close)
+            now_wib = datetime.fromtimestamp(just_closed.time, tz=WIB_TZ)
+            try:
+                ctx = check_setup(
+                    symbol=symbol,
+                    candles_m5=slc_m5,
+                    candles_m15=slc_m15,
+                    symbol_info=sym_info,
+                    spread_pips=self.spread_pips,
+                    commission_pips=self.commission_pips,
+                    balance=balance,
+                    news_events=news_events,
+                    soft_stop_hit=False,
+                    now_wib=now_wib,
+                )
+            except Exception:
+                ctx = None
+            if ctx is None or not ctx.pass_all or ctx.direction is None:
+                continue
+            if ctx.lot_size is None or ctx.lot_size <= 0:
+                continue
+
+            entry_price = (tick.get("ask") or current_close + self.spread_pips * pip_size) \
+                if ctx.direction == "buy" else \
+                (tick.get("bid") or current_close)
+            slip = self.slippage_pips * pip_size
+            entry_price = (entry_price + slip) if ctx.direction == "buy" \
+                else (entry_price - slip)
+            open_trade = {
+                "symbol": symbol,
+                "direction": ctx.direction,
+                "entry": entry_price,
+                "sl": ctx.sl_price or 0.0,
+                "tp1": ctx.tp1_price or 0.0,
+                "tp2": ctx.tp2_price or 0.0,
+                "open_time": datetime.fromtimestamp(
+                    t_time, tz=timezone.utc).isoformat(),
+                "close_time": None,
+                "exit_price": 0.0,
+                "exit_reason": "",
+                "lot": ctx.lot_size,
+                "rr_net": ctx.rr_net or 0.0,
+                "tp1_done": False,
+                "tp2_done": False,
+                "remaining_volume": ctx.lot_size,
+                "pip_size": sym_info.pip_size,
+                "closed": False,
+            }
+
+        # Force-close any remaining open trade at the last tick.
+        if open_trade is not None and not open_trade.get("closed"):
+            last_tick = ticks[-1]
+            open_trade["exit_price"] = float(last_tick.get("bid") or 0.0)
+            open_trade["exit_reason"] = "BACKTEST_END"
+            open_trade["closed"] = True
+            trades.append(self._finalize_trade(open_trade, balance))
+            balance += trades[-1].profit
+
+        wins = sum(1 for t in trades if t.win)
+        losses = len(trades) - wins
+        win_rate = (wins / len(trades) * 100.0) if trades else 0.0
+        avg_rr = (sum(t.rr_net for t in trades) / len(trades)
+                  if trades else 0.0)
+        gross_profit = sum(t.profit for t in trades if t.win)
+        gross_loss = abs(sum(t.profit for t in trades if not t.win))
+        profit_factor = (gross_profit / gross_loss
+                         if gross_loss > 0 else float("inf"))
+        compliance = win_rate
+
+        return BacktestResult(
+            symbol=symbol,
+            timeframe="TICK",
+            start_date=start_date,
+            end_date=end_date,
+            initial_balance=float(initial_balance),
+            final_balance=round(balance, 2),
+            total_trades=len(trades),
+            wins=wins,
+            losses=losses,
+            win_rate_pct=round(win_rate, 2),
+            r_net_avg=round(avg_rr, 3),
+            profit_factor=round(profit_factor, 3) if math.isfinite(
+                profit_factor) else 999.99,
+            max_drawdown_pct=round(max_dd_pct, 2),
+            compliance_score_pct=round(compliance, 2),
+            trades=trades,
+        )
+
+    # ---- tick-aware trade advancement ------------------------------------- #
+
+    def _advance_trade_tick(self, trade: dict[str, Any],
+                            tick: dict[str, Any]) -> None:
+        """Update an open trade against a single tick's bid/ask.
+
+        Intra-candle SL/TP detection: if the tick's bid/ask crosses the
+        SL or TP level, the trade is closed at the level (not at the tick
+        price) - this matches live broker behaviour where stop orders fill
+        at the stop level (barring gaps).
+        """
+        is_buy = trade["direction"] == "buy"
+        sl = trade["sl"]
+        tp1 = trade["tp1"]
+        tp2 = trade["tp2"]
+        bid = float(tick.get("bid") or 0.0)
+        ask = float(tick.get("ask") or 0.0)
+        if bid <= 0 or ask <= 0:
+            return
+        # SL check: buy uses bid, sell uses ask.
+        if is_buy and sl > 0 and bid <= sl:
+            trade["exit_price"] = sl
+            trade["exit_reason"] = "SL_HIT_TICK"
+            trade["closed"] = True
+            return
+        if not is_buy and sl > 0 and ask >= sl:
+            trade["exit_price"] = sl
+            trade["exit_reason"] = "SL_HIT_TICK"
+            trade["closed"] = True
+            return
+        # TP2 check (use bid for buy exits, ask for sell exits).
+        if not trade["tp2_done"] and tp2 > 0:
+            tp2_hit = (is_buy and bid >= tp2) or (not is_buy and ask <= tp2)
+            if tp2_hit:
+                self._partial_close(trade, 0.30, tp2)
+                trade["tp2_done"] = True
+                be_buffer = cfg.BE_BUFFER_PIPS * trade["pip_size"]
+                new_sl = (trade["entry"] + be_buffer) if is_buy \
+                    else (trade["entry"] - be_buffer)
+                trade["sl"] = new_sl
+        # TP1 check (only if TP2 hasn't already fired).
+        if not trade["tp1_done"] and not trade["tp2_done"] and tp1 > 0:
+            tp1_hit = (is_buy and bid >= tp1) or (not is_buy and ask <= tp1)
+            if tp1_hit:
+                self._partial_close(trade, 0.50, tp1)
+                trade["tp1_done"] = True
+                be_buffer = cfg.BE_BUFFER_PIPS * trade["pip_size"]
+                new_sl = (trade["entry"] + be_buffer) if is_buy \
+                    else (trade["entry"] - be_buffer)
+                trade["sl"] = new_sl
+        # Trailing exit (after TP2): close if tick retraces 50% from peak.
+        if trade["tp2_done"]:
+            ref_price = bid if is_buy else ask
+            entry = trade["entry"]
+            trail_stop = (entry + (ref_price - entry) * 0.5) if is_buy \
+                else (entry - (entry - ref_price) * 0.5)
+            if is_buy and bid <= trail_stop:
+                trade["exit_price"] = trail_stop
+                trade["exit_reason"] = "TRAILING_TICK"
+                trade["closed"] = True
+                return
+            if not is_buy and ask >= trail_stop:
+                trade["exit_price"] = trail_stop
+                trade["exit_reason"] = "TRAILING_TICK"
+                trade["closed"] = True
+                return

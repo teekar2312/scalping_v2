@@ -52,7 +52,10 @@ const VIEW_TITLES: Record<string, { title: string; subtitle: string }> = {
   ai: { title: 'AI Analisa (Ollama llama3.2)', subtitle: 'Chat AI dengan context strategi V2' },
   news: { title: 'Kalender Ekonomi Tiingo', subtitle: 'News impact + blackout windows' },
   strategy: { title: 'Strategi V2 Reference', subtitle: 'Manual lengkap strategi scalping V2' },
-  settings: { title: 'Settings', subtitle: 'Auth, Secrets, Regulatory, MT5, Ollama, Tiingo, Bot Mode, Backup' },
+  alerts: { title: 'Price & Indicator Alerts', subtitle: 'Threshold alerts: price, ADX, RSI, spread' },
+  market: { title: 'Market Analysis', subtitle: 'Currency strength · Volume profile · Correlation · Volatility · Order flow · Sentiment · Surprise index' },
+  system: { title: 'System Health', subtitle: 'Service status · CPU · memory · disk · Prometheus metrics' },
+  settings: { title: 'Settings', subtitle: 'Auth, Secrets, Regulatory, MT5, Ollama, Tiingo, Bot Mode, Backup, PWA Push' },
 };
 
 // --- Health status pill (Sprint 8 — DevOps readiness) ---------------------- //

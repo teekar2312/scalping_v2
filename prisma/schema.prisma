@@ -194,3 +194,29 @@ model ChatMessage {
 
   @@index([createdAt])
 }
+
+// Price & indicator alerts (Frontend-100 Feature 5)
+// Created by operators via the Alerts view; evaluated by the backend
+// against live tick data and indicator values. When triggered, the backend
+// emits an `alert_triggered` WebSocket event and (optionally) sends a
+// browser push + Telegram notification.
+model PriceAlert {
+  id              String    @id @default(cuid())
+  // PRICE_ABOVE | PRICE_BELOW | ADX_CROSS_UP | ADX_CROSS_DOWN |
+  // RSI_OVERBOUGHT | RSI_OVERSOLD | SPREAD_WIDE
+  type            String
+  symbol          String
+  threshold       Float
+  // BROWSER | TELEGRAM | BOTH
+  notifyMethod    String    @default("BOTH")
+  active          Boolean   @default(true)
+  note            String?
+  lastTriggered   DateTime?
+  triggerCount    Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([symbol])
+  @@index([active])
+  @@index([type])
+}

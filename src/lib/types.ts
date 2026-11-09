@@ -492,10 +492,13 @@ export type WSEventType =
   | 'position_closed'
   | 'tp1_hit'
   | 'tp2_hit'
+  | 'sl_hit'
+  | 'hard_stop'
   | 'kill_switch_engaged'
   | 'risk_gate_blocked'
   | 'cooldown_engaged'
   | 'margin_warning'
+  | 'alert_triggered'
   | 'tick'
   | 'pong';
 
@@ -855,4 +858,277 @@ export interface EncryptionStatus {
   kdf_iters?: number;
   page_size?: number;
   tested_at: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100 Feature 5: Price & indicator alerts
+// --------------------------------------------------------------------------- //
+
+export type PriceAlertType =
+  | 'PRICE_ABOVE'
+  | 'PRICE_BELOW'
+  | 'ADX_CROSS_UP'
+  | 'ADX_CROSS_DOWN'
+  | 'RSI_OVERBOUGHT'
+  | 'RSI_OVERSOLD'
+  | 'SPREAD_WIDE';
+
+export type PriceAlertNotifyMethod = 'BROWSER' | 'TELEGRAM' | 'BOTH';
+
+export interface PriceAlert {
+  id: string;
+  type: PriceAlertType;
+  symbol: string;
+  threshold: number;
+  notify_method: PriceAlertNotifyMethod;
+  active: boolean;
+  note?: string | null;
+  last_triggered?: string | null;
+  trigger_count: number;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface PriceAlertCreateRequest {
+  type: PriceAlertType;
+  symbol: string;
+  threshold: number;
+  notify_method: PriceAlertNotifyMethod;
+  active?: boolean;
+  note?: string;
+}
+
+export interface PriceAlertListResponse {
+  alerts: PriceAlert[];
+  total: number;
+}
+
+export interface PriceAlertTestResponse {
+  ok: boolean;
+  message: string;
+  fired_at: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100 Feature 6: System Health (extended readiness + system info)
+// --------------------------------------------------------------------------- //
+
+export interface SystemInfoResponse {
+  python_version: string;
+  os: string;
+  hostname: string;
+  cpu_count: number;
+  cpu_percent: number;
+  memory_total_bytes: number;
+  memory_used_bytes: number;
+  memory_percent: number;
+  disk_total_bytes: number;
+  disk_used_bytes: number;
+  disk_percent: number;
+  uptime_seconds: number;
+  active_db_connections: number;
+  boot_time: string;
+  process_id: number;
+}
+
+export interface ServiceStatusEntry {
+  name: string;
+  ok: boolean;
+  latency_ms: number;
+  detail: string;
+}
+
+export interface ServiceStatusResponse {
+  services: ServiceStatusEntry[];
+  checked_at: string;
+}
+
+export interface DrawdownRealtimeResponse {
+  current_drawdown_pct: number;
+  max_drawdown_pct_24h: number;
+  peak_equity: number;
+  current_equity: number;
+  trough_equity_24h: number;
+  recovered: boolean;
+  updated_at: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100 Feature 7: Market Analysis
+// --------------------------------------------------------------------------- //
+
+export interface CurrencyStrengthEntry {
+  currency: string;
+  strength: number; // -100 (weakest) to +100 (strongest)
+  rank: number;
+  change_24h: number;
+}
+
+export interface CurrencyStrengthResponse {
+  timestamp: string;
+  currencies: CurrencyStrengthEntry[];
+}
+
+export interface VolumeProfileLevel {
+  price: number;
+  volume: number;
+  is_poc: boolean;
+  in_value_area: boolean;
+}
+
+export interface VolumeProfileResponse {
+  symbol: string;
+  levels: VolumeProfileLevel[];
+  poc_price: number;
+  vah_price: number;
+  val_price: number;
+  total_volume: number;
+  value_area_volume_pct: number;
+  computed_at: string;
+}
+
+export interface CorrelationMatrixResponse {
+  pairs: string[];
+  window_days: number;
+  matrix: number[][]; // NxN, -1 to +1
+  computed_at: string;
+}
+
+export interface VolatilitySurfaceTenor {
+  tenor: string;
+  volatility_pct: number;
+  annualized_pct: number;
+}
+
+export interface VolatilitySurfaceResponse {
+  symbol: string;
+  tenors: VolatilitySurfaceTenor[];
+  computed_at: string;
+}
+
+export interface OrderFlowLevel {
+  price: number;
+  bid_volume: number;
+  ask_volume: number;
+  imbalance: number; // -1 (sell-heavy) to +1 (buy-heavy)
+}
+
+export interface OrderFlowResponse {
+  symbol: string;
+  supported: boolean;
+  levels: OrderFlowLevel[];
+  total_bid_volume: number;
+  total_ask_volume: number;
+  note?: string;
+  computed_at: string;
+}
+
+export interface NewsSentimentEntry {
+  id: string;
+  title: string;
+  source: string;
+  published_at: string;
+  sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  confidence: number;
+  affected_currencies: string[];
+  url?: string;
+}
+
+export interface NewsSentimentResponse {
+  items: NewsSentimentEntry[];
+  total: number;
+  fetched_at: string;
+}
+
+export interface SurpriseIndexEntry {
+  currency: string;
+  surprise_score: number; // -100 (big miss) to +100 (big beat)
+  actual: number;
+  forecast: number;
+  previous: number;
+  events_count: number;
+}
+
+export interface SurpriseIndexResponse {
+  days: number;
+  entries: SurpriseIndexEntry[];
+  computed_at: string;
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100 Feature 1: PWA / SW / Healthz enhanced
+// --------------------------------------------------------------------------- //
+
+export interface EnhancedHealthzResponse {
+  status: HealthState;
+  uptime_seconds: number;
+  version: string;
+  build_id?: string;
+  commit_sha?: string;
+  checked_at: string;
+}
+
+export interface BrokerStatusResponse {
+  mt5_connected: boolean;
+  mt5_login: number | null;
+  mt5_server: string | null;
+  ollama_connected: boolean;
+  ollama_model: string | null;
+  tiingo_connected: boolean;
+  primary: 'mt5' | 'ollama' | 'tiingo';
+  failover_active: boolean;
+  failover_reason: string | null;
+  last_check: string;
+}
+
+export interface FailoverResponse {
+  ok: boolean;
+  switched_to: string;
+  reason: string;
+  switched_at: string;
+}
+
+export interface SwapsReportEntry {
+  symbol: string;
+  swap_long: number;
+  swap_short: number;
+  swap_long_pips: number;
+  swap_short_pips: number;
+  currency: string;
+  source: string;
+}
+
+export interface SwapsReportResponse {
+  entries: SwapsReportEntry[];
+  total: number;
+  generated_at: string;
+}
+
+export interface TickBacktestRequest {
+  symbol: string;
+  start_time: string;
+  end_time: string;
+  initial_balance?: number;
+}
+
+export interface TickBacktestResult {
+  id: string;
+  symbol: string;
+  total_ticks: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  final_balance: number;
+  max_drawdown_pct: number;
+  profit_factor: number;
+  duration_seconds: number;
+  computed_at: string;
+}
+
+export interface BackupOffsiteResponse {
+  ok: boolean;
+  destination: string;
+  size_bytes: number;
+  uploaded_at: string;
+  message: string;
 }

@@ -168,6 +168,35 @@ POSITION_SIZING_MODE: Final[str] = _get("POSITION_SIZING_MODE", "fixed").lower()
 
 
 # --------------------------------------------------------------------------- #
+# BACKEND-100 (Sprint 9): multi-broker + AWS S3 + Alembic
+# --------------------------------------------------------------------------- #
+
+# Secondary MT5 broker credentials (for failover).  Optional - empty values
+# disable the secondary connector and the pool degrades to primary-only.
+MT5_LOGIN_2: Final[str] = _get("MT5_LOGIN_2", "")
+MT5_PASSWORD_2: Final[str] = _get("MT5_PASSWORD_2", "")
+MT5_SERVER_2: Final[str] = _get("MT5_SERVER_2", "")
+
+# Number of reconnect attempts before the connector pool fails over to the
+# secondary broker.  Default 3.
+MT5_FAILOVER_RETRY_THRESHOLD: Final[int] = int(
+    _get("MT5_FAILOVER_RETRY_THRESHOLD", "3"))
+
+# AWS S3 offsite backup upload (all optional - empty AWS_S3_BUCKET disables).
+AWS_S3_BUCKET: Final[str] = _get("AWS_S3_BUCKET", "")
+AWS_S3_REGION: Final[str] = _get("AWS_S3_REGION", "ap-southeast-1")
+AWS_ACCESS_KEY_ID: Final[str] = _get("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY: Final[str] = _get("AWS_SECRET_ACCESS_KEY", "")
+
+# Alembic migration database URL.  Defaults to the SQLAlchemy URL derived
+# from DB_PATH (SQLite) - override only for non-SQLite backends.
+ALEMBIC_DATABASE_URL: Final[str] = _get(
+    "ALEMBIC_DATABASE_URL",
+    f"sqlite:///{_get('DB_PATH', str(Path(_get('APP_BASE_DIR', Path(__file__).resolve().parent)) / 'data' / 'trading.db'))}",
+)
+
+
+# --------------------------------------------------------------------------- #
 # Dataclasses
 # --------------------------------------------------------------------------- #
 
@@ -244,6 +273,7 @@ class ServerConfig:
 class AppConfig:
     """Top-level application configuration."""
     mt5: MT5Config
+    mt5_secondary: MT5Config | None        # BACKEND-100 #1: failover broker
     ollama: OllamaConfig
     tiingo: TiingoConfig
     risk: RiskConfig
@@ -292,6 +322,22 @@ def load_config() -> AppConfig:
     )
     if not mt5_cfg.password:
         raise RuntimeError("MT5_PASSWORD is required.")
+
+    # ---- BACKEND-100 #1: secondary (failover) broker ----
+    mt5_secondary: MT5Config | None = None
+    sec_login_raw = _get("MT5_LOGIN_2", "")
+    sec_password = _get("MT5_PASSWORD_2", "")
+    sec_server = _get("MT5_SERVER_2", "")
+    if sec_login_raw and sec_login_raw.isdigit() and sec_password and sec_server:
+        mt5_secondary = MT5Config(
+            login=int(sec_login_raw),
+            password=sec_password,
+            server=sec_server,
+            terminal_path=_get("MT5_TERMINAL_PATH_2", "") or None,
+            timeout_ms=int(_get("MT5_TIMEOUT_MS", "60000")),
+            retry_attempts=int(_get("MT5_RETRY_ATTEMPTS", "5")),
+            retry_delay_s=float(_get("MT5_RETRY_DELAY_S", "2.0")),
+        )
 
     # ---- Ollama ----
     ollama_cfg = OllamaConfig(
@@ -349,6 +395,7 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         mt5=mt5_cfg,
+        mt5_secondary=mt5_secondary,
         ollama=ollama_cfg,
         tiingo=tiingo_cfg,
         risk=risk_cfg,
@@ -383,5 +430,11 @@ __all__ = [
     "NTP_DRIFT_TOLERANCE_S",
     "API_KEYS", "DB_ENCRYPTION_KEY", "SECRETS_MASTER_KEY",
     "ADMIN_PASSWORD", "ENFORCE_HTTPS", "POSITION_SIZING_MODE",
+    # BACKEND-100 Sprint 9
+    "MT5_LOGIN_2", "MT5_PASSWORD_2", "MT5_SERVER_2",
+    "MT5_FAILOVER_RETRY_THRESHOLD",
+    "AWS_S3_BUCKET", "AWS_S3_REGION",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "ALEMBIC_DATABASE_URL",
     "load_config", "settings",
 ]

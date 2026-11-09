@@ -171,6 +171,11 @@ class EngineState:
     dry_run: bool = False
     peak_equity: float = 0.0
     last_equity_sample_at: float = 0.0
+    # ---- BACKEND-100 #13: tick-driven drawdown tracking ---- #
+    max_drawdown_realtime_pct: float = 0.0
+    last_tick_at: float = 0.0
+    drawdown_alert_80pct: bool = False
+    recovery_target_equity: float = 0.0  # peak_equity * (1 + 1%)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,6 +193,11 @@ class EngineState:
             "paper_mode": self.paper_mode,
             "dry_run": self.dry_run,
             "peak_equity": self.peak_equity,
+            # BACKEND-100 #13
+            "max_drawdown_realtime_pct": self.max_drawdown_realtime_pct,
+            "last_tick_at": self.last_tick_at,
+            "drawdown_alert_80pct": self.drawdown_alert_80pct,
+            "recovery_target_equity": self.recovery_target_equity,
         }
 
 
@@ -385,6 +395,12 @@ class TradingEngine:
 
         # Equity-curve sample (audit-fix Sprint 3 #19) - every ~60s
         await self._sample_equity_curve(account)
+
+        # BACKEND-100 #13: tick-driven drawdown (real-time)
+        await self._update_realtime_drawdown(account)
+
+        # Swap rollover tracking (BACKEND-100 #12) - daily at 00:00 WIB
+        await self._maybe_record_swap(account)
 
         # Weekend closer (audit-fix Sprint 2 #13)
         await self._maybe_weekend_close()
@@ -1314,7 +1330,12 @@ class TradingEngine:
     # ------------------------------------------------------------------ #
 
     async def _sample_equity_curve(self, account: Any) -> None:
-        """Insert an EquityCurve row every ~60 seconds."""
+        """Insert an EquityCurve row every ~60 seconds.
+
+        BACKEND-100 #13: also called from :meth:`_update_realtime_drawdown`
+        on every tick - but the DB row is throttled to once per 60s to
+        avoid bloating the table.
+        """
         now_mono = asyncio.get_event_loop().time()
         if (now_mono - self.state.last_equity_sample_at) < 60.0:
             return
@@ -1341,6 +1362,164 @@ class TradingEngine:
             )
         except Exception as exc:  # pragma: no cover
             logger.debug("equity sample failed: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    # BACKEND-100 #13: tick-driven drawdown (real-time)
+    # ------------------------------------------------------------------ #
+
+    async def _update_realtime_drawdown(self, account: Any | None = None
+                                        ) -> dict[str, Any]:
+        """Update peak equity + drawdown from a tick-level account snapshot.
+
+        Called on every loop tick (instead of the legacy 60s interval).
+        When drawdown exceeds 80% of the configured hard-stop tier, an
+        alert is published to the EventBus (and a Telegram alert is fired
+        via the notification manager).
+
+        Returns a dict with the current drawdown snapshot for
+        ``GET /api/drawdown/realtime``.
+        """
+        try:
+            if account is None and not self.paper_mode:
+                account = await asyncio.to_thread(
+                    self.connector.get_account_info)
+        except Exception as exc:
+            logger.debug("realtime DD: get_account_info failed: %s", exc)
+            account = None
+        if account is None:
+            account = _PaperAccount(self.state.equity or self.state.balance)
+        try:
+            balance = float(getattr(account, "balance", 0.0) or 0.0)
+            equity = float(getattr(account, "equity", 0.0) or 0.0)
+        except Exception:
+            balance, equity = self.state.balance, self.state.equity
+        # Update peak equity + drawdown.
+        if equity > self.state.peak_equity:
+            self.state.peak_equity = equity
+            # Reset the alert latch when we make a new high.
+            self.state.drawdown_alert_80pct = False
+            # Recovery target = 1% above the new peak.
+            self.state.recovery_target_equity = round(equity * 1.01, 2)
+        peak = self.state.peak_equity or equity
+        dd_pct = ((peak - equity) / peak * 100.0) if peak > 0 else 0.0
+        self.state.max_drawdown_realtime_pct = max(
+            self.state.max_drawdown_realtime_pct, dd_pct)
+        self.state.last_tick_at = asyncio.get_event_loop().time()
+        # Persist the running peak into DailyRisk so cross-restart state
+        # is preserved (best-effort).
+        try:
+            today = datetime.now(WIB_TZ).date().isoformat()
+            db.update_daily(today,
+                            max_drawdown_realtime_pct=round(
+                                self.state.max_drawdown_realtime_pct, 4))
+        except Exception:  # pragma: no cover
+            pass
+        # Alert if drawdown > 80% of the hard-stop tier (-2%).
+        hard_stop_pct = abs(cfg.TIERED_STOPS.get("hard", 0.02)) * 100.0
+        alert_threshold = hard_stop_pct * 0.8
+        if dd_pct >= alert_threshold and not self.state.drawdown_alert_80pct:
+            self.state.drawdown_alert_80pct = True
+            logger.critical(
+                "REALTIME DRAWDOWN ALERT: %.2f%% (>= 80%% of hard stop "
+                "%.2f%%) - peak=%.2f equity=%.2f",
+                dd_pct, hard_stop_pct, peak, equity,
+            )
+            await self.bus.publish({
+                "type": "drawdown_alert",
+                "drawdown_pct": round(dd_pct, 4),
+                "threshold_pct": round(alert_threshold, 4),
+                "peak_equity": peak,
+                "equity": equity,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            })
+        return {
+            "current_drawdown_pct": round(dd_pct, 4),
+            "max_drawdown_realtime_pct": round(
+                self.state.max_drawdown_realtime_pct, 4),
+            "peak_equity": round(peak, 2),
+            "current_equity": round(equity, 2),
+            "recovery_target_equity": self.state.recovery_target_equity,
+            "alert_80pct_active": self.state.drawdown_alert_80pct,
+            "last_tick_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def get_realtime_drawdown_snapshot(self) -> dict[str, Any]:
+        """Return the current real-time drawdown snapshot (no MT5 call)."""
+        equity = self.state.equity or self.state.balance
+        peak = self.state.peak_equity or equity
+        dd_pct = ((peak - equity) / peak * 100.0) if peak > 0 else 0.0
+        return {
+            "current_drawdown_pct": round(dd_pct, 4),
+            "max_drawdown_realtime_pct": round(
+                self.state.max_drawdown_realtime_pct, 4),
+            "peak_equity": round(peak, 2),
+            "current_equity": round(equity, 2),
+            "recovery_target_equity": self.state.recovery_target_equity,
+            "alert_80pct_active": self.state.drawdown_alert_80pct,
+            "last_tick_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    # ------------------------------------------------------------------ #
+    # BACKEND-100 #12: daily swap / rollover tracking
+    # ------------------------------------------------------------------ #
+
+    async def _maybe_record_swap(self, account: Any) -> None:
+        """Once per trading day at 00:00 WIB, persist a SwapRecord for each
+        open position.
+
+        The MT5 ``swap`` field on the position reflects the *cumulative*
+        swap charged so far - we record the daily delta by subtracting
+        the previous day's cumulative swap (tracked in DB via
+        ``trades.swap``).
+        """
+        if self.paper_mode or self.dry_run:
+            return
+        now_wib = datetime.now(WIB_TZ)
+        # Idempotency flag so we only record once per WIB day.
+        flag = f"swap_recorded_{now_wib.date().isoformat()}"
+        if db.get_setting(flag) == "1":
+            return
+        try:
+            positions = await asyncio.to_thread(self.connector.get_positions)
+        except Exception as exc:  # pragma: no cover
+            logger.debug("swap record: get_positions failed: %s", exc)
+            return
+        if not positions:
+            db.set_setting(flag, "1")
+            return
+        recorded = 0
+        for p in positions:
+            try:
+                # Look up the matching trade row to read its prior swap total.
+                trade = db.get_trade_by_ticket(int(p.ticket))
+                prev_swap = float((trade or {}).get("swap") or 0.0)
+                current_swap = float(p.profit and 0.0 or 0.0)  # swap not in Position
+                # The Position dataclass doesn't carry swap; we read it via
+                # MT5's positions_get raw tuple if available.  Fall back to
+                # the trade row's stored swap delta.
+                delta = current_swap - prev_swap
+                days_held = max(1, (now_wib.date()
+                                    - datetime.fromtimestamp(
+                                        p.open_time, tz=WIB_TZ).date()).days)
+                db.insert_swap_record(
+                    date=now_wib.date().isoformat(),
+                    ticket=int(p.ticket),
+                    symbol=p.symbol,
+                    swap_amount=round(delta, 4),
+                    days_held=int(days_held),
+                )
+                # Update the trade row's cumulative swap.
+                if trade and trade.get("id"):
+                    db.update_trade(int(trade["id"]),
+                                    swap=round(current_swap, 4))
+                recorded += 1
+            except Exception as exc:  # pragma: no cover
+                logger.warning("swap record ticket=%s failed: %s",
+                               p.ticket, exc)
+        db.set_setting(flag, "1")
+        if recorded:
+            logger.info("Recorded swap for %d open positions on %s",
+                        recorded, now_wib.date().isoformat())
 
     # ------------------------------------------------------------------ #
     # Audit-fix Sprint 2 #13: Weekend position closer

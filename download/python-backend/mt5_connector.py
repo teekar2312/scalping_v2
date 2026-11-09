@@ -882,6 +882,419 @@ def reset_connector() -> None:
     _default_connector = None
 
 
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #1: multi-broker connector pool with failover
+# --------------------------------------------------------------------------- #
+
+class MT5ConnectorPool:
+    """Hold a primary and optional secondary MT5 connector.
+
+    Provides failover semantics: if the primary connector drops and cannot
+    be re-established within ``MT5_FAILOVER_RETRY_THRESHOLD`` retries,
+    subsequent calls route to the secondary connector instead (if one was
+    configured).  Use :meth:`get_active` to obtain the connector that should
+    service the current request.
+
+    Notes
+    -----
+    * MT5's ``mt5.initialize`` is process-global: only one terminal session
+      may be active at a time.  When we fail over we ``shutdown`` the
+      primary first, then ``initialize`` the secondary.
+    * The pool is intentionally synchronous - the trading engine wraps it
+      in ``asyncio.to_thread``.
+    """
+
+    def __init__(self,
+                 primary: MT5Connector,
+                 secondary: MT5Connector | None = None,
+                 failover_threshold: int | None = None) -> None:
+        self.primary = primary
+        self.secondary = secondary
+        self.failover_threshold = (
+            failover_threshold
+            if failover_threshold is not None
+            else int(cfg.MT5_FAILOVER_RETRY_THRESHOLD)
+        )
+        self._primary_failures = 0
+        self._active_label: str = "primary"
+
+    # ---- selection --------------------------------------------------------- #
+
+    def get_active(self) -> MT5Connector:
+        """Return the primary if connected, else the secondary."""
+        if self.primary.connected:
+            self._active_label = "primary"
+            # Reset failure counter once primary recovers.
+            self._primary_failures = 0
+            return self.primary
+        # Primary is down - try to (re)initialize once on this call path.
+        try:
+            ok = self.primary.initialize()
+            if ok:
+                self._primary_failures = 0
+                self._active_label = "primary"
+                return self.primary
+        except Exception as exc:  # pragma: no cover
+            logger.warning("MT5ConnectorPool: primary reconnect raised %s", exc)
+        self._primary_failures += 1
+        # Fail over if a secondary is configured and the threshold is hit.
+        if (self.secondary is not None
+                and self._primary_failures >= self.failover_threshold):
+            logger.warning(
+                "MT5ConnectorPool: primary down (%d failures) - failing over "
+                "to secondary (%s)",
+                self._primary_failures, self.secondary.config.mt5.server,
+            )
+            try:
+                # Primary must release the MT5 terminal before secondary can
+                # initialize (mt5 is process-global).
+                self.primary.shutdown()
+                ok2 = self.secondary.initialize()
+                if ok2:
+                    self._active_label = "secondary"
+                    return self.secondary
+            except Exception as exc:  # pragma: no cover
+                logger.error("MT5ConnectorPool: secondary init failed: %s", exc)
+        # No secondary or secondary init failed - return primary anyway so
+        # the caller's ``connected`` check returns False as expected.
+        self._active_label = "primary"
+        return self.primary
+
+    def failover(self) -> bool:
+        """Force an immediate failover to the secondary broker.
+
+        Returns ``True`` if the secondary is now connected.
+        """
+        if self.secondary is None:
+            return False
+        try:
+            self.primary.shutdown()
+            ok = self.secondary.initialize()
+            if ok:
+                self._active_label = "secondary"
+                self._primary_failures = self.failover_threshold
+                logger.info("MT5ConnectorPool: manual failover succeeded")
+                return True
+        except Exception as exc:  # pragma: no cover
+            logger.error("MT5ConnectorPool: manual failover failed: %s", exc)
+        return False
+
+    # ---- status ----------------------------------------------------------- #
+
+    def status(self) -> dict[str, Any]:
+        """Return a JSON-serialisable status dict for /api/broker/status."""
+        def _conn(c: MT5Connector) -> dict[str, Any]:
+            try:
+                server = c.config.mt5.server
+                login = c.config.mt5.login
+                connected = c.connected
+            except Exception:
+                server, login, connected = "?", 0, False
+            return {"connected": bool(connected),
+                    "server": server, "login": login}
+
+        return {
+            "primary": _conn(self.primary),
+            "secondary": _conn(self.secondary) if self.secondary else None,
+            "active": self._active_label,
+            "primary_failures": self._primary_failures,
+            "failover_threshold": self.failover_threshold,
+        }
+
+    def shutdown(self) -> None:
+        """Shut down both connectors."""
+        try:
+            self.primary.shutdown()
+        except Exception:  # pragma: no cover
+            pass
+        if self.secondary is not None:
+            try:
+                self.secondary.shutdown()
+            except Exception:  # pragma: no cover
+                pass
+
+
+_default_pool: MT5ConnectorPool | None = None
+
+
+def get_connector_pool() -> MT5ConnectorPool:
+    """Return the lazily-initialised module-level connector pool.
+
+    The pool wraps the existing singleton primary connector and - if env vars
+    ``MT5_LOGIN_2`` / ``MT5_PASSWORD_2`` / ``MT5_SERVER_2`` are set - a
+    secondary connector for failover.
+    """
+    global _default_pool
+    if _default_pool is None:
+        primary = get_connector()
+        secondary: MT5Connector | None = None
+        if settings.mt5_secondary is not None:
+            # Build a secondary connector with a cloned config pointing at
+            # the secondary broker.
+            sec_cfg = type(settings)(mt5=settings.mt5_secondary,
+                                     mt5_secondary=None,
+                                     ollama=settings.ollama,
+                                     tiingo=settings.tiingo,
+                                     risk=settings.risk,
+                                     paths=settings.paths,
+                                     server=settings.server,
+                                     pairs=settings.pairs,
+                                     mt5_symbols=settings.mt5_symbols,
+                                     timezone=settings.timezone)
+            secondary = MT5Connector(config=sec_cfg)
+        _default_pool = MT5ConnectorPool(primary=primary, secondary=secondary)
+    return _default_pool
+
+
+def reset_connector_pool() -> None:
+    """Reset the module-level pool singleton (tests / restarts)."""
+    global _default_pool
+    if _default_pool is not None:
+        _default_pool.shutdown()
+    _default_pool = None
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #4: market depth (Level 2) access
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class MarketDepthLevel:
+    """One row of the L2 order book."""
+    price: float
+    volume: float
+    side: str            # "bid" | "ask"
+    type: str            # "market" | "limit" (MT5_BOOK_TYPE_*)
+
+
+def get_market_depth(symbol: str) -> list[MarketDepthLevel] | None:
+    """Return the current Level-2 order book for ``symbol``.
+
+    Returns ``None`` when the broker / symbol doesn't support L2 depth
+    (this is the common case for retail FX brokers - the function is a
+    graceful no-op so callers can probe and fall back to top-of-book).
+
+    Requires that the MT5 terminal be already initialized; the caller is
+    responsible for invoking ``connector.initialize()`` first.
+    """
+    if not MT5_AVAILABLE:
+        return None
+    try:
+        # The MT5 API requires the caller to subscribe to the book first.
+        if not mt5.market_book_add(symbol):  # type: ignore[union-attr]
+            logger.debug("market_book_add(%s) returned False - L2 not "
+                         "supported for this symbol", symbol)
+            return None
+        book = mt5.market_book_get(symbol)  # type: ignore[union-attr]
+    except Exception as exc:  # pragma: no cover
+        logger.debug("market_book_get(%s) raised: %s", symbol, exc)
+        return None
+    finally:
+        try:
+            if MT5_AVAILABLE:
+                mt5.market_book_release(symbol)  # type: ignore[union-attr]
+        except Exception:  # pragma: no cover
+            pass
+    if not book:
+        return None
+    out: list[MarketDepthLevel] = []
+    # MT5 BookInfo tuple fields: type, price, volume, volume_real
+    _SIDE_MAP = {1: "sell", 2: "buy"}
+    for row in book:
+        try:
+            type_int = int(row.type)
+            side = _SIDE_MAP.get(type_int, "unknown")
+            out.append(MarketDepthLevel(
+                price=float(row.price),
+                volume=float(getattr(row, "volume", 0) or 0),
+                side=side,
+                type=("market" if type_int in (1, 2) else "limit"),
+            ))
+        except Exception:  # pragma: no cover
+            continue
+    return out or None
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #10: smart order router (best-execution logic)
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class OrderResult:
+    """Best-execution result returned by :class:`OrderRouter`."""
+    success: bool
+    filled_price: float | None
+    slippage_pips: float
+    latency_ms: float
+    attempts: int
+    ticket: int
+    retcode: int
+    comment: str
+    child_orders: list[dict[str, Any]]
+
+
+class OrderRouter:
+    """Wrap an :class:`MT5Connector` with best-execution heuristics.
+
+    Behaviour:
+      1. Read the current top-of-book (bid/ask + spread) before sending.
+      2. If the spread is wider than ``2 x normal_spread_points`` (a
+         configurable "fast market" detector), wait 1s and retry up to
+         ``max_retries`` times before sending.
+      3. If the broker rejects the order on slippage, retry with a wider
+         deviation.  If the deviation cap (``MAX_SLIPPAGE_POINTS_ENTRY``)
+         is exceeded, split the order into two smaller child orders to
+         minimise market impact.
+      4. Track the requested vs filled price so the caller can persist the
+         execution-quality metrics on the Trade row.
+
+    The router is intentionally synchronous; the trading engine wraps
+    calls in ``asyncio.to_thread`` (and the existing
+    ``place_order_async`` helper).
+    """
+
+    def __init__(self,
+                 connector: MT5Connector,
+                 *,
+                 normal_spread_points: float = 20.0,
+                 max_retries: int = 3,
+                 split_threshold_dev: int | None = None) -> None:
+        self.connector = connector
+        self.normal_spread_points = float(normal_spread_points)
+        self.max_retries = int(max_retries)
+        self.split_threshold_dev = (
+            int(split_threshold_dev)
+            if split_threshold_dev is not None
+            else int(cfg.MAX_SLIPPAGE_POINTS_ENTRY)
+        )
+
+    # ---- public API ------------------------------------------------------- #
+
+    def place_order_optimized(self,
+                              symbol: str,
+                              direction: str,
+                              volume: float,
+                              sl: float,
+                              tp: float,
+                              comment: str = "") -> OrderResult:
+        """Place an order with retry + split-on-slippage best execution."""
+        t0 = time.perf_counter()
+        attempts = 0
+        # ---- Step 1: wait for spread to normalise ------------------------ #
+        for retry in range(1, self.max_retries + 1):
+            attempts += 1
+            try:
+                info = self.connector.get_symbol_info(symbol)
+            except Exception as exc:
+                logger.warning("OrderRouter: get_symbol_info failed: %s", exc)
+                return OrderResult(
+                    success=False, filled_price=None, slippage_pips=0.0,
+                    latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+                    attempts=attempts, ticket=0, retcode=-1,
+                    comment=f"symbol_info_error: {exc}",
+                    child_orders=[],
+                )
+            spread_pts = float(info.spread) if info else 0.0
+            if spread_pts <= 2.0 * self.normal_spread_points:
+                break
+            logger.info(
+                "OrderRouter(%s): spread %.1f pts > 2x normal %.1f - "
+                "waiting 1s (retry %d/%d)",
+                symbol, spread_pts, self.normal_spread_points,
+                retry, self.max_retries,
+            )
+            time.sleep(1.0)
+        # ---- Step 2: try direct place_order ------------------------------ #
+        try:
+            result = self.connector.place_order(
+                symbol=symbol, direction=direction, volume=volume,
+                sl=sl, tp=tp, comment=comment,
+            )
+        except Exception as exc:
+            logger.error("OrderRouter: place_order raised: %s", exc)
+            return OrderResult(
+                success=False, filled_price=None, slippage_pips=0.0,
+                latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+                attempts=attempts, ticket=0, retcode=-1,
+                comment=f"exception: {exc}",
+                child_orders=[],
+            )
+        attempts += 1
+        if result.get("ok"):
+            return OrderResult(
+                success=True,
+                filled_price=result.get("fill_price"),
+                slippage_pips=float(result.get("slippage_actual_pips") or 0.0),
+                latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+                attempts=attempts,
+                ticket=int(result.get("ticket") or 0),
+                retcode=int(result.get("retcode") or 0),
+                comment=str(result.get("comment") or ""),
+                child_orders=[],
+            )
+        # ---- Step 3: on slippage rejection, split into 2 smaller orders -- #
+        rc = int(result.get("retcode") or -1)
+        if rc in (10004, 10016, 10021) and volume >= 0.02:
+            # Slippage exceeded - split the order into two halves.
+            half = round(volume / 2.0, 2)
+            if half < 0.01:
+                # Volume too small to split - return the failure.
+                return OrderResult(
+                    success=False, filled_price=None,
+                    slippage_pips=0.0,
+                    latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+                    attempts=attempts, ticket=0, retcode=rc,
+                    comment=f"slippage_rejected_too_small: {result.get('comment')}",
+                    child_orders=[],
+                )
+            logger.info("OrderRouter(%s): splitting %.2f lot into 2x %.2f "
+                        "on retcode=%s", symbol, volume, half, rc)
+            child_results: list[dict[str, Any]] = []
+            total_filled_price: list[float] = []
+            total_slippage: list[float] = []
+            tickets: list[int] = []
+            for i in range(2):
+                attempts += 1
+                sub = self.connector.place_order(
+                    symbol=symbol, direction=direction, volume=half,
+                    sl=sl, tp=tp,
+                    comment=(comment + (f"_s{i+1}" if comment else f"s{i+1}")),
+                )
+                child_results.append(sub)
+                if sub.get("ok"):
+                    if sub.get("fill_price"):
+                        total_filled_price.append(float(sub["fill_price"]))
+                    total_slippage.append(float(sub.get("slippage_actual_pips") or 0.0))
+                    tickets.append(int(sub.get("ticket") or 0))
+                else:
+                    # If a child fails, leave the parent as failed.
+                    pass
+            ok = len(total_filled_price) == 2
+            avg_price = (sum(total_filled_price) / len(total_filled_price)
+                         if total_filled_price else None)
+            avg_slip = (sum(total_slippage) / len(total_slippage)
+                        if total_slippage else 0.0)
+            return OrderResult(
+                success=ok,
+                filled_price=avg_price,
+                slippage_pips=round(avg_slip, 4),
+                latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+                attempts=attempts,
+                ticket=tickets[0] if tickets else 0,
+                retcode=0 if ok else rc,
+                comment="split_fill" if ok else "split_partial_fail",
+                child_orders=child_results,
+            )
+        # Plain failure - return as-is.
+        return OrderResult(
+            success=False, filled_price=None, slippage_pips=0.0,
+            latency_ms=round((time.perf_counter() - t0) * 1000, 2),
+            attempts=attempts, ticket=0, retcode=rc,
+            comment=str(result.get("comment") or "failed"),
+            child_orders=[],
+        )
+
+
 __all__ = [
     "MT5Connector", "MT5UnavailableError", "OrderTimeoutError",
     "AccountInfo", "SymbolInfo", "CandleBar", "Position",
@@ -889,4 +1302,8 @@ __all__ = [
     "get_connector", "reset_connector",
     "place_order_async", "modify_position_async",
     "close_position_async", "partial_close_async",
+    # BACKEND-100 Sprint 9
+    "MT5ConnectorPool", "get_connector_pool", "reset_connector_pool",
+    "MarketDepthLevel", "get_market_depth",
+    "OrderRouter", "OrderResult",
 ]

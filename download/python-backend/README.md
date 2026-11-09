@@ -30,6 +30,9 @@ dashboard connects to.
 10. [Safety](#safety)
 11. [V2 strategy 9-month roadmap](#v2-strategy-9-month-roadmap)
 12. [Troubleshooting](#troubleshooting)
+13. [VPS deployment + watchdog](#vps-deployment--watchdog)
+14. [Alembic database migrations](#alembic-database-migrations)
+15. [Backup encryption + S3 offsite](#backup-encryption--s3-offsite)
 
 ---
 
@@ -385,3 +388,155 @@ Install the `tzdata` package (already in `requirements.txt`) and restart.
 
 Provided as-is for educational and personal use.  No warranty.  Trading
 Forex carries substantial risk of loss.
+
+---
+
+## VPS deployment + watchdog
+
+For 24/5 unattended operation we recommend running the backend as a
+managed service on a Windows VPS (for MT5) or Linux VPS (paper mode,
+analytics, backtests).  A `watchdog.py` companion process can monitor
+the backend PID and restart it on crash or memory exhaustion.
+
+### Linux (systemd)
+
+1. Copy `deploy/systemd/scalping-v2.service` to `/etc/systemd/system/`.
+2. Edit the file:
+   - Set `User=` / `Group=` to your service account.
+   - Set `WorkingDirectory=` to the backend install path.
+   - Set `EnvironmentFile=` to your `.env` file path.
+   - Adjust `MemoryMax=` if needed (default 2GB).
+3. Reload systemd and start:
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable scalping-v2
+   sudo systemctl start scalping-v2
+   sudo systemctl status scalping-v2
+   sudo journalctl -u scalping-v2 -f   # live logs
+   ```
+
+4. The unit includes `Restart=on-failure` (10s delay, 5 bursts per 5min),
+   memory capping, and systemd hardening (no new privileges, private tmp,
+   restricted syscalls).
+
+### Windows (NSSM service)
+
+1. Install [NSSM](https://nssm.cc/) and copy `nssm.exe` to
+   `C:\Windows\System32\`.
+2. Open an Administrator `cmd`, `cd` to the backend folder, run:
+
+   ```powershell
+   deploy\windows\install-service.bat
+   ```
+
+   This installs + starts the `ForexScalpingV2` Windows service with
+   auto-restart, log rotation, and the venv Python interpreter.
+
+3. Manage via `services.msc` or `nssm start/stop/restart ForexScalpingV2`.
+4. Logs are written to `logs\service.out.log` and `logs\service.err.log`.
+5. To uninstall:
+
+   ```powershell
+   deploy\windows\uninstall-service.bat
+   ```
+
+### Watchdog (optional, for crash recovery)
+
+`watchdog.py` is a standalone process that monitors the backend PID file
+and restarts it on crash or excessive memory use (>1GB RSS by default).
+
+```bash
+# Linux - run as a separate systemd unit (recommended)
+python watchdog.py --pid-file /tmp/forex-backend.pid \
+    --interval 30 --mem-limit 1024 \
+    -- /opt/forex-scalping-v2/python-backend/.venv/bin/python main.py
+
+# Or from Python
+from watchdog import start_watchdog
+start_watchdog(
+    pid_file="/tmp/forex-backend.pid",
+    restart_cmd=["systemctl", "restart", "scalping-v2"],
+    check_interval_s=30,
+    memory_limit_mb=1024,
+)
+```
+
+The watchdog respects a 5-restart-per-5min cap to avoid crash loops.
+
+---
+
+## Alembic database migrations
+
+The schema is created automatically on first run via SQLAlchemy's
+`create_all`.  For incremental schema changes going forward we use
+[Alembic](https://alembic.sqlalchemy.org/).  Configuration lives in
+`alembic.ini` + `alembic/env.py` (reads the DB URL from
+`ALEMBIC_DATABASE_URL` env var or falls back to `DB_PATH`).
+
+```bash
+# Apply all migrations to head
+alembic upgrade head
+
+# Show current revision
+alembic current
+
+# Create a new auto-generated migration after editing models in database.py
+alembic revision --autogenerate -m "add_swap_record_table"
+
+# Roll back one revision
+alembic downgrade -1
+```
+
+> **Note:** the additive ALTER TABLE migrations (new columns on existing
+> tables) are still applied automatically by `Database.__init__` on
+> startup, so Alembic is not required for existing deployments - it's
+> the recommended tool for new ones.
+
+---
+
+## Backup encryption + S3 offsite
+
+### Encrypted local backup
+
+```bash
+curl -X POST http://localhost:8000/api/backup/offsite \
+     -H "Authorization: Bearer $API_KEY"
+```
+
+Encrypts `data/trading.db` with Fernet using `SECRETS_MASTER_KEY`
+(generate with `python generate_key.py secrets`).  Writes
+`data/backups/trading_backup_YYYYMMDD_HHMMSS.db.enc` and returns:
+
+```json
+{
+  "local_path": ".../trading_backup_20260101_120000.db.enc",
+  "encrypted": true,
+  "size_bytes": 12345,
+  "s3_url": null,
+  "s3_error": null
+}
+```
+
+### AWS S3 offsite upload
+
+Set the AWS env vars in `.env`:
+
+```ini
+AWS_S3_BUCKET=my-forex-backups
+AWS_S3_REGION=ap-southeast-1
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+```
+
+The same `POST /api/backup/offsite` call will then upload the encrypted
+blob to `s3://my-forex-backups/backups/trading_backup_*.db.enc` and
+return `s3_url` in the response.  Failures return `s3_error` (e.g.
+boto3 not installed) - the local encrypted file is still written.
+
+For scheduled daily offsite backups, wrap the call in a cron job:
+
+```cron
+0 2 * * * curl -sX POST http://localhost:8000/api/backup/offsite \
+    -H "Authorization: Bearer $API_KEY" >> /var/log/forex-backup.log 2>&1
+```

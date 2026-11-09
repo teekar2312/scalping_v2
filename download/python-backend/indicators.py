@@ -608,6 +608,121 @@ def candle_pattern_detection(candles: Sequence[Candle]) -> CandlePattern:
     return CandlePattern(name="none", confidence=0.0, index=idx)
 
 
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #2: Volume profile (POC / VAH / VAL)
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class VolumeProfile:
+    """Result of a volume-profile computation.
+
+    * ``poc_price``  - Point of Control: the price level with the highest
+      traded volume over the lookback window.
+    * ``vah``        - Value Area High: the upper price containing 70% of
+      the total volume (above + at POC).
+    * ``val``        - Value Area Low: the lower price containing 70% of
+      the total volume (below + at POC).
+    * ``bins``       - number of price bins used to histogram volume.
+    * ``histogram``  - list of ``(price, volume)`` tuples sorted ascending
+      by price.
+    """
+    poc_price: float
+    vah: float
+    val: float
+    bins: int
+    histogram: list[tuple[float, float]]
+
+
+def volume_profile(candles: Sequence[Candle],
+                   lookback: int = 70,
+                   bins: int = 50) -> VolumeProfile:
+    """Compute the volume profile (POC / VAH / VAL) over the lookback.
+
+    The function bins each candle's traded volume by its typical price
+    ``(high + low + close) / 3`` and finds the price level with the highest
+    total volume (POC).  The "value area" is the price range around POC
+    containing 70% of total volume - VAH is the upper bound, VAL the lower.
+
+    Parameters
+    ----------
+    candles : sequence of :class:`Candle`
+        OHLCV candles, oldest first.
+    lookback : int
+        Number of most-recent candles to consider (default 70).
+    bins : int
+        Number of price bins to use for the histogram (default 50).
+
+    Returns
+    -------
+    VolumeProfile
+        With ``nan`` POC/VAH/VAL when the input is empty or has zero volume.
+    """
+    if not candles:
+        return VolumeProfile(float("nan"), float("nan"), float("nan"),
+                             0, [])
+    window = list(candles[-lookback:]) if len(candles) >= lookback \
+        else list(candles)
+    # Build (price, volume) samples keyed on typical price.
+    samples: list[tuple[float, float]] = []
+    for c in window:
+        if c.volume <= 0:
+            continue
+        typical = (c.high + c.low + c.close) / 3.0
+        samples.append((typical, float(c.volume)))
+    if not samples:
+        return VolumeProfile(float("nan"), float("nan"), float("nan"),
+                             0, [])
+    prices = [p for p, _ in samples]
+    p_lo = min(prices)
+    p_hi = max(prices)
+    if p_hi <= p_lo:
+        # All trades at one price -> POC == VAH == VAL == that price.
+        total_vol = sum(v for _, v in samples)
+        return VolumeProfile(p_lo, p_lo, p_lo, 1, [(p_lo, total_vol)])
+    n_bins = max(1, int(bins))
+    bin_width = (p_hi - p_lo) / n_bins
+    # Bucket volume into bins.
+    bin_vol: list[float] = [0.0] * n_bins
+    for price, vol in samples:
+        idx = int((price - p_lo) / bin_width)
+        if idx >= n_bins:
+            idx = n_bins - 1
+        bin_vol[idx] += vol
+    # POC = bin with highest volume
+    poc_idx = max(range(n_bins), key=lambda i: bin_vol[i])
+    poc_price = p_lo + (poc_idx + 0.5) * bin_width
+    total_vol = sum(bin_vol)
+    target = 0.70 * total_vol
+    # Walk outward from POC, accumulating volume, until we have 70%.
+    accumulated = bin_vol[poc_idx]
+    vah_idx = poc_idx
+    val_idx = poc_idx
+    while accumulated < target and (val_idx > 0 or vah_idx < n_bins - 1):
+        # Expand to whichever side has more volume next.
+        below = bin_vol[val_idx - 1] if val_idx > 0 else 0.0
+        above = bin_vol[vah_idx + 1] if vah_idx < n_bins - 1 else 0.0
+        if below >= above and val_idx > 0:
+            val_idx -= 1
+            accumulated += below
+        elif vah_idx < n_bins - 1:
+            vah_idx += 1
+            accumulated += above
+        else:
+            val_idx -= 1
+            accumulated += below
+    vah = p_lo + (vah_idx + 1) * bin_width
+    val = p_lo + val_idx * bin_width
+    histogram = [(p_lo + (i + 0.5) * bin_width, bin_vol[i])
+                 for i in range(n_bins)]
+    return VolumeProfile(
+        poc_price=round(poc_price, 8),
+        vah=round(vah, 8),
+        val=round(val, 8),
+        bins=n_bins,
+        histogram=histogram,
+    )
+
+
 __all__ = [
     "Candle", "CandlePattern", "SwingLevels", "ADXResult", "BollingerResult",
     "ema", "ema_series",
@@ -618,4 +733,6 @@ __all__ = [
     "rsi", "rsi_series",
     "swing_high_low",
     "candle_pattern_detection",
+    # BACKEND-100 #2
+    "volume_profile", "VolumeProfile",
 ]

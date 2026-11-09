@@ -109,6 +109,8 @@ class Trade(Base):
     # ---- Sprint 7 #17: slippage + latency ---- #
     slippage_actual = Column(Float, nullable=True)             # pips (fill - req)
     execution_latency_ms = Column(Integer, nullable=True)      # order ack latency
+    # ---- BACKEND-100 #13: tick-driven drawdown tracking ---- #
+    max_drawdown_realtime_pct = Column(Float, nullable=True)
 
 
 class Signal(Base):
@@ -171,6 +173,8 @@ class DailyRisk(Base):
     last_loss_time = Column(DateTime, nullable=True)
     last_win_time = Column(DateTime, nullable=True)
     cooldown_until = Column(DateTime, nullable=True)
+    # ---- BACKEND-100 #13: real-time drawdown peak ---- #
+    max_drawdown_realtime_pct = Column(Float, default=0.0)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 
@@ -413,6 +417,32 @@ class StressTestResult(Base):
 
 
 # --------------------------------------------------------------------------- #
+# BACKEND-100 #12: swap / rollover tracking
+# --------------------------------------------------------------------------- #
+
+class SwapRecord(Base):
+    """Daily swap (rollover) charge / credit for an open position.
+
+    One row is written per open position per swap-charge event (typically
+    once per trading day at 00:00 WIB).  Accumulated swap is also stored
+    on the parent :class:`Trade` row (``Trade.swap``).
+    """
+    __tablename__ = "swap_records"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(String(10), nullable=False, index=True)         # YYYY-MM-DD
+    ticket = Column(Integer, nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    swap_amount = Column(Float, default=0.0)                      # account ccy
+    days_held = Column(Integer, default=1)                        # cumulative
+    recorded_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                         index=True)
+
+
+Index("ix_swap_records_date_ticket", SwapRecord.date, SwapRecord.ticket)
+Index("ix_swap_records_symbol_date", SwapRecord.symbol, SwapRecord.date)
+
+
+# --------------------------------------------------------------------------- #
 # Indices
 # --------------------------------------------------------------------------- #
 
@@ -560,6 +590,8 @@ class Database:
             # Sprint 7 #17
             ("slippage_actual", "FLOAT", "NULL"),
             ("execution_latency_ms", "INTEGER", "NULL"),
+            # BACKEND-100 #13: tick-driven drawdown tracking
+            ("max_drawdown_realtime_pct", "FLOAT", "NULL"),
         ],
         "daily_risk": [
             ("consecutive_loss_count", "INTEGER", "0"),
@@ -567,6 +599,8 @@ class Database:
             ("last_loss_time", "DATETIME", "NULL"),
             ("last_win_time", "DATETIME", "NULL"),
             ("cooldown_until", "DATETIME", "NULL"),
+            # BACKEND-100 #13
+            ("max_drawdown_realtime_pct", "FLOAT", "NULL"),
         ],
         "bot_state": [
             ("is_paper", "BOOLEAN", "0"),
@@ -721,6 +755,9 @@ def _trade_to_dict(t: Trade) -> dict[str, Any]:
         # Sprint 7 #17
         "slippage_actual": getattr(t, "slippage_actual", None),
         "execution_latency_ms": getattr(t, "execution_latency_ms", None),
+        # BACKEND-100 #13
+        "max_drawdown_realtime_pct": getattr(
+            t, "max_drawdown_realtime_pct", None),
     }
 
 
@@ -882,6 +919,9 @@ def get_or_create_daily(date_str: str, starting_balance: float) -> dict[str, Any
                               if getattr(d, "last_win_time", None) else None),
             "cooldown_until": (d.cooldown_until.isoformat()
                                if getattr(d, "cooldown_until", None) else None),
+            # BACKEND-100 #13
+            "max_drawdown_realtime_pct": getattr(
+                d, "max_drawdown_realtime_pct", 0.0),
         }
 
 
@@ -1690,6 +1730,155 @@ def get_stress_test_result(result_id: int) -> dict[str, Any] | None:
         }
 
 
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #12: swap / rollover CRUD
+# --------------------------------------------------------------------------- #
+
+def insert_swap_record(date: str,
+                       ticket: int,
+                       symbol: str,
+                       swap_amount: float,
+                       days_held: int = 1) -> int:
+    """Persist a single swap-charge event for an open position.
+
+    Parameters
+    ----------
+    date : str
+        ISO date (YYYY-MM-DD) of the swap charge (typically the trading
+        day on which the rollover happened, in broker terms = the date
+        the position was held *through* 00:00 WIB).
+    ticket : int
+        MT5 position ticket.
+    symbol : str
+        Pair symbol.
+    swap_amount : float
+        Swap in account currency (negative = charge, positive = credit).
+    days_held : int
+        Cumulative days the position has been held (including this one).
+
+    Returns
+    -------
+    int
+        New SwapRecord.id.
+    """
+    db = get_db()
+    with db.session() as s:
+        row = SwapRecord(
+            date=str(date),
+            ticket=int(ticket),
+            symbol=str(symbol),
+            swap_amount=float(swap_amount),
+            days_held=int(days_held),
+        )
+        s.add(row)
+        s.flush()
+        return int(row.id)
+
+
+def list_swap_records(start: str | None = None,
+                      end: str | None = None,
+                      symbol: str | None = None,
+                      ticket: int | None = None,
+                      limit: int = 1000) -> list[dict[str, Any]]:
+    """Return swap records filtered by date range and optional symbol/ticket."""
+    db = get_db()
+    with db.session() as s:
+        stmt = (select(SwapRecord)
+                .order_by(SwapRecord.date.desc(), SwapRecord.id.desc())
+                .limit(int(limit)))
+        if start:
+            stmt = stmt.where(SwapRecord.date >= str(start))
+        if end:
+            stmt = stmt.where(SwapRecord.date <= str(end))
+        if symbol:
+            stmt = stmt.where(SwapRecord.symbol == str(symbol))
+        if ticket is not None:
+            stmt = stmt.where(SwapRecord.ticket == int(ticket))
+        rows = s.execute(stmt).scalars().all()
+        return [{
+            "id": r.id,
+            "date": r.date,
+            "ticket": r.ticket,
+            "symbol": r.symbol,
+            "swap_amount": r.swap_amount,
+            "days_held": r.days_held,
+            "recorded_at": (r.recorded_at.isoformat()
+                            if r.recorded_at else None),
+        } for r in rows]
+
+
+def swap_summary_by_day(start: str | None = None,
+                        end: str | None = None
+                        ) -> list[dict[str, Any]]:
+    """Aggregate swap totals per day (over an optional date range)."""
+    db = get_db()
+    with db.session() as s:
+        stmt = select(SwapRecord)
+        if start:
+            stmt = stmt.where(SwapRecord.date >= str(start))
+        if end:
+            stmt = stmt.where(SwapRecord.date <= str(end))
+        rows = s.execute(stmt).scalars().all()
+        by_day: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            d = by_day.setdefault(r.date, {
+                "date": r.date, "total_swap": 0.0,
+                "positions_charged": 0, "symbols": set(),
+            })
+            d["total_swap"] += float(r.swap_amount or 0.0)
+            d["positions_charged"] += 1
+            d["symbols"].add(r.symbol)
+        out: list[dict[str, Any]] = []
+        for d in sorted(by_day.keys(), reverse=True):
+            row = by_day[d]
+            out.append({
+                "date": row["date"],
+                "total_swap": round(row["total_swap"], 4),
+                "positions_charged": row["positions_charged"],
+                "symbols": sorted(row["symbols"]),
+            })
+        return out
+
+
+def swap_summary_by_symbol(start: str | None = None,
+                           end: str | None = None
+                           ) -> list[dict[str, Any]]:
+    """Aggregate swap totals per symbol (over an optional date range)."""
+    db = get_db()
+    with db.session() as s:
+        stmt = select(SwapRecord)
+        if start:
+            stmt = stmt.where(SwapRecord.date >= str(start))
+        if end:
+            stmt = stmt.where(SwapRecord.date <= str(end))
+        rows = s.execute(stmt).scalars().all()
+        by_sym: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            d = by_sym.setdefault(r.symbol, {
+                "symbol": r.symbol, "total_swap": 0.0,
+                "samples": 0, "min_swap": None, "max_swap": None,
+            })
+            d["total_swap"] += float(r.swap_amount or 0.0)
+            d["samples"] += 1
+            if d["min_swap"] is None or r.swap_amount < d["min_swap"]:
+                d["min_swap"] = float(r.swap_amount)
+            if d["max_swap"] is None or r.swap_amount > d["max_swap"]:
+                d["max_swap"] = float(r.swap_amount)
+        out: list[dict[str, Any]] = []
+        for sym, d in by_sym.items():
+            avg = (d["total_swap"] / d["samples"]) if d["samples"] else 0.0
+            out.append({
+                "symbol": sym,
+                "total_swap": round(d["total_swap"], 4),
+                "samples": d["samples"],
+                "avg_swap_per_day": round(avg, 4),
+                "min_swap": round(d["min_swap"], 4) if d["min_swap"] is not None else None,
+                "max_swap": round(d["max_swap"], 4) if d["max_swap"] is not None else None,
+            })
+        out.sort(key=lambda r: r["total_swap"])
+        return out
+
+
 __all__ = [
     "Base", "Database", "get_db",
     "Trade", "Signal", "NewsEvent", "DailyRisk", "WeeklyRisk",
@@ -1698,6 +1887,8 @@ __all__ = [
     # Sprint 5/6/7 models
     "Secret", "User", "UserRole",
     "RiskAcknowledgment", "TradeEvent", "LatencySample", "StressTestResult",
+    # BACKEND-100 #12
+    "SwapRecord",
     # CRUD
     "insert_trade", "update_trade", "get_trade", "list_trades",
     "get_trade_by_ticket", "get_trade_orm_by_ticket", "list_open_trades",
@@ -1720,4 +1911,7 @@ __all__ = [
     "get_user_by_username", "get_user_by_api_key", "create_user",
     "update_user_api_key", "ensure_default_admin",
     "insert_stress_test_result", "get_stress_test_result",
+    # BACKEND-100 #12 swap CRUD
+    "insert_swap_record", "list_swap_records",
+    "swap_summary_by_day", "swap_summary_by_symbol",
 ]

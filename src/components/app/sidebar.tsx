@@ -15,6 +15,9 @@ import {
   ScrollText,
   TrendingDown,
   BarChart3,
+  Bell,
+  Globe,
+  Activity,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 import { DEMO_MODE } from '@/lib/api';
@@ -31,7 +34,10 @@ const NAV_ITEMS: ReadonlyArray<{ id: AppView; label: string; icon: typeof Layout
   { id: 'backtest', label: 'Backtest · Monte Carlo · WF', icon: FlaskConical },
   { id: 'stress-test', label: 'Stress Test', icon: TrendingDown },
   { id: 'analytics', label: 'Slippage · Latency · Kelly', icon: BarChart3 },
+  { id: 'market', label: 'Market Analysis', icon: Globe },
+  { id: 'alerts', label: 'Price Alerts', icon: Bell },
   { id: 'audit', label: 'Audit Log', icon: ScrollText },
+  { id: 'system', label: 'System Health', icon: Activity },
   { id: 'ai', label: 'AI Analisa', icon: Bot },
   { id: 'news', label: 'Kalender Ekonomi', icon: CalendarClock },
   { id: 'strategy', label: 'Strategi V2 Ref', icon: FileText },

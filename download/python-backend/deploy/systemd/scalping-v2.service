@@ -1,0 +1,54 @@
+[Unit]
+Description=Forex Scalping Backend (V2 Strategy)
+Documentation=https://github.com/your-org/forex-scalping-v2
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=forex-bot
+Group=forex-bot
+WorkingDirectory=/opt/forex-scalping-v2/python-backend
+EnvironmentFile=/opt/forex-scalping-v2/python-backend/.env
+ExecStart=/opt/forex-scalping-v2/python-backend/.venv/bin/python main.py
+ExecStop=/bin/kill -TERM $MAINPID
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Resource limits - prevent runaway memory
+MemoryMax=2G
+MemoryHigh=1536M
+CPUQuota=200%
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/forex-scalping-v2/python-backend/data /opt/forex-scalping-v2/python-backend/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Logging - journald captures stdout/stderr
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=forex-scalping-v2
+
+# Watchdog - systemd will restart if no ping within 60s
+WatchdogSec=60
+NotifyAccess=main
+
+[Install]
+WantedBy=multi-user.target

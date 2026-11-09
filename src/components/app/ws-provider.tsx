@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { wsClient } from '@/lib/api';
 import { useAppStore } from '@/lib/store';
 import { toast } from '@/hooks/use-toast';
+import { notifyOnWSEvent, isPushEnabledInStorage } from '@/lib/push-notifications';
 import type {
   WSEvent,
   WSEventType,
@@ -46,6 +47,13 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     // audit-log refresh counter (the AuditLogView re-fetches on change).
     const unsubWildcard = wsClient.subscribe('*', (event: WSEvent) => {
       bumpAuditLog();
+
+      // Fire-and-forget: push a browser notification for the events the user
+      // has opted-in to (kill switch / cooldown / margin / TP / SL).
+      if (isPushEnabledInStorage()) {
+        void notifyOnWSEvent(event);
+      }
+
       switch (event.type) {
         case 'tick': {
           if (event.symbol && typeof event.bid === 'number' && typeof event.ask === 'number') {

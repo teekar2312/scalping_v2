@@ -58,6 +58,12 @@ import type {
   RiskMetrics,
 } from '@/lib/types';
 import { BotControl } from '../bot-control';
+import {
+  DashboardLayoutProvider,
+  DashboardCustomizeToolbar,
+  WidgetBlock,
+  DashboardDragContainer,
+} from '../dashboard-configurator';
 
 function RiskDisclosureBanner() {
   const [text, setText] = useState<string | null>(null);
@@ -523,6 +529,14 @@ function VarCell({
 }
 
 export function DashboardView() {
+  return (
+    <DashboardLayoutProvider>
+      <DashboardViewInner />
+    </DashboardLayoutProvider>
+  );
+}
+
+function DashboardViewInner() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [signals, setSignals] = useState<Signal[]>([]);
@@ -580,160 +594,181 @@ export function DashboardView() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      {/* Risk disclosure */}
-      <RiskDisclosureBanner />
+      {/* Customize toolbar (drag-drop widget reordering, presets, visibility) */}
+      <DashboardCustomizeToolbar />
 
-      {/* Top row: Account + System Status + Risk Status */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Balance"
-          value={account.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          unit={account.currency}
-          icon={Wallet}
-          variant="default"
-        />
-        <StatCard
-          label="Equity"
-          value={account.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          unit={account.currency}
-          icon={TrendingUp}
-          trend={account.profit >= 0 ? 'up' : 'down'}
-          trendValue={`${account.profit >= 0 ? '+' : ''}${account.profit.toFixed(2)}`}
-          variant={account.profit >= 0 ? 'bull' : 'bear'}
-        />
-        <StatCard
-          label="Daily P&L"
-          value={`${dailyPnlPct >= 0 ? '+' : ''}${dailyPnlPct.toFixed(2)}`}
-          unit="%"
-          icon={Percent}
-          trend={dailyPnlPct >= 0 ? 'up' : 'down'}
-          trendValue={`${dailyRisk.tradesCount} trades · ${dailyRisk.winsCount}W/${dailyRisk.lossesCount}L`}
-          variant={dailyPnlPct >= 0 ? 'bull' : 'bear'}
-        />
-        <StatCard
-          label="Weekly P&L"
-          value={`${weeklyPnlPct >= 0 ? '+' : ''}${weeklyPnlPct.toFixed(2)}`}
-          unit="%"
-          icon={Activity}
-          trend={weeklyPnlPct >= 0 ? 'up' : 'down'}
-          trendValue={`Overall ${(status.overallPnlPct * 100).toFixed(1)}%`}
-          variant={weeklyPnlPct >= 0 ? 'bull' : 'bear'}
-        />
-      </div>
+      <DashboardDragContainer>
+        {/* Risk disclosure */}
+        <WidgetBlock id="risk-disclosure">
+          <RiskDisclosureBanner />
+        </WidgetBlock>
 
-      {/* Equity curve (full width on top of detail row) */}
-      {equity.length > 0 && <EquityCurvePanel points={equity} />}
+        {/* Top row: Account + System Status + Risk Status */}
+        <WidgetBlock id="account-stats">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <StatCard
+              label="Balance"
+              value={account.balance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              unit={account.currency}
+              icon={Wallet}
+              variant="default"
+            />
+            <StatCard
+              label="Equity"
+              value={account.equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              unit={account.currency}
+              icon={TrendingUp}
+              trend={account.profit >= 0 ? 'up' : 'down'}
+              trendValue={`${account.profit >= 0 ? '+' : ''}${account.profit.toFixed(2)}`}
+              variant={account.profit >= 0 ? 'bull' : 'bear'}
+            />
+            <StatCard
+              label="Daily P&L"
+              value={`${dailyPnlPct >= 0 ? '+' : ''}${dailyPnlPct.toFixed(2)}`}
+              unit="%"
+              icon={Percent}
+              trend={dailyPnlPct >= 0 ? 'up' : 'down'}
+              trendValue={`${dailyRisk.tradesCount} trades · ${dailyRisk.winsCount}W/${dailyRisk.lossesCount}L`}
+              variant={dailyPnlPct >= 0 ? 'bull' : 'bear'}
+            />
+            <StatCard
+              label="Weekly P&L"
+              value={`${weeklyPnlPct >= 0 ? '+' : ''}${weeklyPnlPct.toFixed(2)}`}
+              unit="%"
+              icon={Activity}
+              trend={weeklyPnlPct >= 0 ? 'up' : 'down'}
+              trendValue={`Overall ${(status.overallPnlPct * 100).toFixed(1)}%`}
+              variant={weeklyPnlPct >= 0 ? 'bull' : 'bear'}
+            />
+          </div>
+        </WidgetBlock>
 
-      {/* VaR / CVaR risk metrics panel (Sprint 7) */}
-      <RiskMetricsPanel balance={account.balance} />
+        {/* Equity curve (full width on top of detail row) */}
+        {equity.length > 0 && (
+          <WidgetBlock id="equity-curve">
+            <EquityCurvePanel points={equity} />
+          </WidgetBlock>
+        )}
+
+        {/* VaR / CVaR risk metrics panel (Sprint 7) */}
+        <WidgetBlock id="risk-metrics">
+          <RiskMetricsPanel balance={account.balance} />
+        </WidgetBlock>
 
       {/* System Status + Bot Control + Risk Status */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* System Status */}
-        <PanelCard
-          title="System Status"
-          subtitle={`${status.demoMode ? 'Demo Mode · ' : ''}Python backend ${status.pythonBackendUrl || 'tidak terhubung'}`}
-          icon={Activity}
-          actions={<BotControl status={bot.status} onStatusChange={(s: BotStatus) => setStatus({ ...status, bot: { ...bot, status: s } })} />}
-        >
-          <div className="flex flex-col gap-3 pt-3">
-            <StatusDot status={status.mt5Available ? 'ok' : 'error'} label="MT5 Connection" value={account.server} />
-            <StatusDot status={status.ollamaAvailable ? 'ok' : 'error'} label="Ollama AI" value="llama3.2:latest" />
-            <StatusDot status={status.tiingoAvailable ? 'ok' : 'error'} label="Tiingo Calendar" value="Connected" />
-            <div className="my-2 border-t" />
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div>
-                <div className="text-muted-foreground">Bot Status</div>
-                <div className="font-semibold tabular-nums">{bot.status}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Uptime</div>
-                <div className="font-semibold tabular-nums">
-                  {Math.floor(bot.uptimeSec / 60)}m {bot.uptimeSec % 60}s
+        <WidgetBlock id="system-status">
+          <PanelCard
+            title="System Status"
+            subtitle={`${status.demoMode ? 'Demo Mode · ' : ''}Python backend ${status.pythonBackendUrl || 'tidak terhubung'}`}
+            icon={Activity}
+            actions={<BotControl status={bot.status} onStatusChange={(s: BotStatus) => setStatus({ ...status, bot: { ...bot, status: s } })} />}
+          >
+            <div className="flex flex-col gap-3 pt-3">
+              <StatusDot status={status.mt5Available ? 'ok' : 'error'} label="MT5 Connection" value={account.server} />
+              <StatusDot status={status.ollamaAvailable ? 'ok' : 'error'} label="Ollama AI" value="llama3.2:latest" />
+              <StatusDot status={status.tiingoAvailable ? 'ok' : 'error'} label="Tiingo Calendar" value="Connected" />
+              <div className="my-2 border-t" />
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <div className="text-muted-foreground">Bot Status</div>
+                  <div className="font-semibold tabular-nums">{bot.status}</div>
                 </div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Total Trades</div>
-                <div className="font-semibold tabular-nums">{bot.totalTrades}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Win Rate</div>
-                <div className="font-semibold tabular-nums">
-                  {bot.totalTrades > 0 ? ((bot.totalWins / bot.totalTrades) * 100).toFixed(1) : '0'}%
+                <div>
+                  <div className="text-muted-foreground">Uptime</div>
+                  <div className="font-semibold tabular-nums">
+                    {Math.floor(bot.uptimeSec / 60)}m {bot.uptimeSec % 60}s
+                  </div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Total Trades</div>
+                  <div className="font-semibold tabular-nums">{bot.totalTrades}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">Win Rate</div>
+                  <div className="font-semibold tabular-nums">
+                    {bot.totalTrades > 0 ? ((bot.totalWins / bot.totalTrades) * 100).toFixed(1) : '0'}%
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </PanelCard>
+          </PanelCard>
+        </WidgetBlock>
 
         {/* Risk Status - Tiered Stop Tracker */}
-        <PanelCard
-          title="Tiered Stop Tracker"
-          subtitle="V2 Risk Management"
-          icon={ShieldCheck}
-        >
-          <div className="flex flex-col gap-3 pt-3">
-            <RiskRow
-              label="Soft Daily Stop"
-              limit="-1%"
-              status={dailyRisk.softStopHit ? 'HIT' : dailyPnlPct <= -1 ? 'HIT' : 'OK'}
-              current={`${dailyPnlPct.toFixed(2)}%`}
-            />
-            <RiskRow
-              label="Hard Daily Stop"
-              limit="-2%"
-              status={dailyRisk.hardStopHit ? 'HIT' : dailyPnlPct <= -2 ? 'HIT' : 'OK'}
-              current={`${dailyPnlPct.toFixed(2)}%`}
-            />
-            <RiskRow
-              label="Weekly Drawdown"
-              limit="-4%"
-              status={weeklyPnlPct <= -4 ? 'HIT' : 'OK'}
-              current={`${weeklyPnlPct.toFixed(2)}%`}
-            />
-            <RiskRow
-              label="Overall Drawdown"
-              limit="-10%"
-              status={status.overallPnlPct * 100 <= -10 ? 'HIT' : 'OK'}
-              current={`${(status.overallPnlPct * 100).toFixed(2)}%`}
-            />
-            <div className="my-1 border-t" />
-            <div className="text-xs">
-              <div className="mb-2 flex justify-between">
-                <span className="text-muted-foreground">Daily Loss Progress</span>
-                <span className="tabular-nums font-medium">
-                  {Math.abs(dailyPnlPct).toFixed(2)}% / {hardStopPct.toFixed(0)}% hard stop
-                </span>
-              </div>
-              <Progress
-                value={dailyLossProgress}
-                className={cn('h-2', dailyLossProgress > 50 && '[&>div]:bg-warn', dailyLossProgress > 80 && '[&>div]:bg-bear')}
+        <WidgetBlock id="risk-tier-tracker">
+          <PanelCard
+            title="Tiered Stop Tracker"
+            subtitle="V2 Risk Management"
+            icon={ShieldCheck}
+          >
+            <div className="flex flex-col gap-3 pt-3">
+              <RiskRow
+                label="Soft Daily Stop"
+                limit="-1%"
+                status={dailyRisk.softStopHit ? 'HIT' : dailyPnlPct <= -1 ? 'HIT' : 'OK'}
+                current={`${dailyPnlPct.toFixed(2)}%`}
               />
+              <RiskRow
+                label="Hard Daily Stop"
+                limit="-2%"
+                status={dailyRisk.hardStopHit ? 'HIT' : dailyPnlPct <= -2 ? 'HIT' : 'OK'}
+                current={`${dailyPnlPct.toFixed(2)}%`}
+              />
+              <RiskRow
+                label="Weekly Drawdown"
+                limit="-4%"
+                status={weeklyPnlPct <= -4 ? 'HIT' : 'OK'}
+                current={`${weeklyPnlPct.toFixed(2)}%`}
+              />
+              <RiskRow
+                label="Overall Drawdown"
+                limit="-10%"
+                status={status.overallPnlPct * 100 <= -10 ? 'HIT' : 'OK'}
+                current={`${(status.overallPnlPct * 100).toFixed(2)}%`}
+              />
+              <div className="my-1 border-t" />
+              <div className="text-xs">
+                <div className="mb-2 flex justify-between">
+                  <span className="text-muted-foreground">Daily Loss Progress</span>
+                  <span className="tabular-nums font-medium">
+                    {Math.abs(dailyPnlPct).toFixed(2)}% / {hardStopPct.toFixed(0)}% hard stop
+                  </span>
+                </div>
+                <Progress
+                  value={dailyLossProgress}
+                  className={cn('h-2', dailyLossProgress > 50 && '[&>div]:bg-warn', dailyLossProgress > 80 && '[&>div]:bg-bear')}
+                />
+              </div>
+              <div className="mt-2 flex items-center gap-3 text-xs">
+                <span className="text-muted-foreground">Positions:</span>
+                <Badge variant="outline" className="tabular-nums">
+                  {status.openPositionsCount}/{V2_RULES.MAX_POSITIONS}
+                </Badge>
+                <span className="text-muted-foreground">·</span>
+                <span className="text-muted-foreground">Today Trades:</span>
+                <Badge variant="outline" className="tabular-nums">
+                  {status.todayTradesCount}/{V2_RULES.MAX_DAILY_TRADES}
+                </Badge>
+              </div>
             </div>
-            <div className="mt-2 flex items-center gap-3 text-xs">
-              <span className="text-muted-foreground">Positions:</span>
-              <Badge variant="outline" className="tabular-nums">
-                {status.openPositionsCount}/{V2_RULES.MAX_POSITIONS}
-              </Badge>
-              <span className="text-muted-foreground">·</span>
-              <span className="text-muted-foreground">Today Trades:</span>
-              <Badge variant="outline" className="tabular-nums">
-                {status.todayTradesCount}/{V2_RULES.MAX_DAILY_TRADES}
-              </Badge>
-            </div>
-          </div>
-        </PanelCard>
+          </PanelCard>
+        </WidgetBlock>
 
         {/* Streak status (new) */}
-        <StreakStatusPanel />
+        <WidgetBlock id="streak-cooldown">
+          <StreakStatusPanel />
+        </WidgetBlock>
       </div>
 
       {/* Active Symbol Quick Select + News */}
-      <PanelCard
-        title="Pair Monitor"
-        subtitle="Klik untuk lihat chart · live price dari WebSocket"
-        icon={Target}
-      >
+      <WidgetBlock id="pair-monitor">
+        <PanelCard
+          title="Pair Monitor"
+          subtitle="Klik untuk lihat chart · live price dari WebSocket"
+          icon={Target}
+        >
         <div className="flex flex-col gap-2 pt-3">
           {TRADING_PAIRS.map((pair) => {
             const isActive = activeSymbol === pair.symbol;
@@ -801,21 +836,23 @@ export function DashboardView() {
           </div>
         </div>
       </PanelCard>
+      </WidgetBlock>
 
       {/* Open Positions + Active Signals */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         {/* Open Positions */}
-        <PanelCard
-          title="Open Positions"
-          subtitle={`${trades.length} aktif · stage tracking`}
-          icon={TrendingUp}
-          className="xl:col-span-2"
-          actions={
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setActiveView('positions')}>
-              Lihat semua →
-            </Button>
-          }
-        >
+        <WidgetBlock id="open-positions" className="xl:col-span-2">
+          <PanelCard
+            title="Open Positions"
+            subtitle={`${trades.length} aktif · stage tracking`}
+            icon={TrendingUp}
+            className="xl:col-span-2"
+            actions={
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setActiveView('positions')}>
+                Lihat semua →
+              </Button>
+            }
+          >
           <div className="pt-3">
             {trades.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-sm text-muted-foreground">
@@ -878,105 +915,113 @@ export function DashboardView() {
             )}
           </div>
         </PanelCard>
+        </WidgetBlock>
 
         {/* Active Signals */}
-        <PanelCard
-          title="Sinyal V2 Aktif"
-          subtitle={`${activeSignals.length} setup menunggu`}
-          icon={Zap}
-          actions={
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setActiveView('signals')}>
-              Semua →
-            </Button>
-          }
-        >
-          <div className="flex flex-col gap-2 pt-3">
-            {activeSignals.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-sm text-muted-foreground">
-                <Zap className="h-8 w-8 mb-2 opacity-30" />
-                Tidak ada sinyal aktif
-              </div>
-            ) : (
-              activeSignals.map((sig) => (
-                <div key={sig.id} className="rounded-md border p-2.5">
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          'text-[10px] px-1.5',
-                          sig.direction === 'BUY' ? 'text-bull border-bull' : 'text-bear border-bear'
-                        )}
-                      >
-                        {sig.direction}
-                      </Badge>
-                      <span className="text-sm font-semibold">{sig.symbol}</span>
-                    </div>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      RR {sig.rrNet.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                    <span>ADX {sig.adxValue.toFixed(1)}</span>
-                    <span>ATR {sig.atrValue.toFixed(1)}</span>
-                    <span>{sig.setupType.replace('_', ' ')}</span>
-                    <span className="ml-auto">{sig.session}</span>
-                  </div>
+        <WidgetBlock id="active-signals">
+          <PanelCard
+            title="Sinyal V2 Aktif"
+            subtitle={`${activeSignals.length} setup menunggu`}
+            icon={Zap}
+            actions={
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setActiveView('signals')}>
+                Semua →
+              </Button>
+            }
+          >
+            <div className="flex flex-col gap-2 pt-3">
+              {activeSignals.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8 text-sm text-muted-foreground">
+                  <Zap className="h-8 w-8 mb-2 opacity-30" />
+                  Tidak ada sinyal aktif
                 </div>
-              ))
-            )}
-          </div>
-        </PanelCard>
+              ) : (
+                activeSignals.map((sig) => (
+                  <div key={sig.id} className="rounded-md border p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'text-[10px] px-1.5',
+                            sig.direction === 'BUY' ? 'text-bull border-bull' : 'text-bear border-bear'
+                          )}
+                        >
+                          {sig.direction}
+                        </Badge>
+                        <span className="text-sm font-semibold">{sig.symbol}</span>
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        RR {sig.rrNet.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                      <span>ADX {sig.adxValue.toFixed(1)}</span>
+                      <span>ATR {sig.atrValue.toFixed(1)}</span>
+                      <span>{sig.setupType.replace('_', ' ')}</span>
+                      <span className="ml-auto">{sig.session}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </PanelCard>
+        </WidgetBlock>
       </div>
 
       {/* Bottom: Session Indicator + News Calendar Mini */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <PanelCard
-          title="Sesi Trading WIB"
-          subtitle="Jam emas: 14:00-17:00 & 19:30-22:00"
-          icon={Clock}
-        >
-          <SessionTimeline />
-        </PanelCard>
+        <WidgetBlock id="session-timeline">
+          <PanelCard
+            title="Sesi Trading WIB"
+            subtitle="Jam emas: 14:00-17:00 & 19:30-22:00"
+            icon={Clock}
+          >
+            <SessionTimeline />
+          </PanelCard>
+        </WidgetBlock>
 
-        <PanelCard
-          title="Kalender Ekonomi"
-          subtitle="Berikutnya 7 hari · Tiingo"
-          icon={CalendarClock}
-          actions={
-            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setActiveView('news')}>
-              Detail →
-            </Button>
-          }
-        >
-          <div className="pt-3">
-            <div className="flex flex-col gap-1.5">
-              {news.slice(0, 6).map((n) => (
-                <div key={n.id} className="flex items-center gap-2 text-xs">
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      'text-[9px] px-1 py-0',
-                      n.impact === 'HIGH' ? 'text-bear border-bear' : n.impact === 'MEDIUM' ? 'text-warn border-warn' : 'text-muted-foreground'
-                    )}
-                  >
-                    {n.impact}
-                  </Badge>
-                  <span className="font-medium truncate flex-1">{n.title}</span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {new Date(n.eventTime).toLocaleString('id-ID', {
-                      day: '2-digit',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      timeZone: 'Asia/Jakarta',
-                    })}
-                  </span>
-                </div>
-              ))}
+        <WidgetBlock id="news-calendar">
+          <PanelCard
+            title="Kalender Ekonomi"
+            subtitle="Berikutnya 7 hari · Tiingo"
+            icon={CalendarClock}
+            actions={
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setActiveView('news')}>
+                Detail →
+              </Button>
+            }
+          >
+            <div className="pt-3">
+              <div className="flex flex-col gap-1.5">
+                {news.slice(0, 6).map((n) => (
+                  <div key={n.id} className="flex items-center gap-2 text-xs">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-[9px] px-1 py-0',
+                        n.impact === 'HIGH' ? 'text-bear border-bear' : n.impact === 'MEDIUM' ? 'text-warn border-warn' : 'text-muted-foreground'
+                      )}
+                    >
+                      {n.impact}
+                    </Badge>
+                    <span className="font-medium truncate flex-1">{n.title}</span>
+                    <span className="text-muted-foreground tabular-nums">
+                      {new Date(n.eventTime).toLocaleString('id-ID', {
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        timeZone: 'Asia/Jakarta',
+                      })}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        </PanelCard>
+          </PanelCard>
+        </WidgetBlock>
       </div>
+      </DashboardDragContainer>
     </div>
   );
 }

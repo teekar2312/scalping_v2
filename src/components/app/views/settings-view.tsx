@@ -12,6 +12,7 @@ import {
   ExternalLink,
   AlertCircle,
   Send,
+  Bell,
   ToggleLeft,
   ToggleRight,
   Database,
@@ -70,6 +71,16 @@ import { TRADING_PAIRS, V2_RULES } from '@/lib/constants';
 import { DEMO_MODE } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
+import {
+  isPushSupported,
+  getPushPermissionState,
+  requestNotificationPermission,
+  subscribeToPush,
+  unsubscribeFromPush,
+  showLocalNotification,
+  isPushEnabledInStorage,
+  setPushEnabledInStorage,
+} from '@/lib/push-notifications';
 import type {
   Settings,
   ServiceTestResult,
@@ -140,6 +151,59 @@ export function SettingsView() {
   const [encryption, setEncryption] = useState<EncryptionStatus | null>(null);
   const [changePwd, setChangePwd] = useState({ current: '', next: '', confirm: '' });
   const [changingPwd, setChangingPwd] = useState(false);
+
+  // --- PWA push notification state --- //
+  const pushSupported = typeof window !== 'undefined' && isPushSupported();
+  const [pushPermState, setPushPermState] = useState<'default' | 'granted' | 'denied'>('default');
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    setPushPermState(getPushPermissionState());
+    setPushEnabled(isPushEnabledInStorage());
+  }, [pushSupported]);
+
+  const handlePushToggle = async (checked: boolean) => {
+    setPushBusy(true);
+    try {
+      if (checked) {
+        const perm = await requestNotificationPermission();
+        setPushPermState(perm);
+        if (perm !== 'granted') {
+          toast({
+            title: 'Push permission denied',
+            description: 'Izinkan notifications di browser untuk mengaktifkan alert.',
+            variant: 'destructive',
+          });
+          return;
+        }
+        const sub = await subscribeToPush();
+        if (sub) {
+          setPushEnabled(true);
+          setPushEnabledInStorage(true);
+          toast({
+            title: 'Push notifications aktif',
+            description: 'Kill switch / cooldown / TP / SL alerts akan dikirim ke perangkat ini.',
+          });
+        } else {
+          toast({
+            title: 'Push subscription gagal',
+            description: 'Coba refresh dan pastikan service worker terdaftar.',
+            variant: 'destructive',
+          });
+        }
+      } else {
+        const ok = await unsubscribeFromPush();
+        setPushEnabled(false);
+        if (ok) {
+          toast({ title: 'Push notifications dimatikan' });
+        }
+      }
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   useEffect(() => {
     setLocal(settings);
@@ -1166,6 +1230,87 @@ export function SettingsView() {
                 <strong>{testing.telegram.result.ok ? 'OK' : 'FAIL'}</strong>: {testing.telegram.result.message}
               </div>
             )}
+          </div>
+        </PanelCard>
+
+        {/* Browser Push Notifications (PWA) */}
+        <PanelCard
+          title="Browser Push Notifications"
+          subtitle="Local notifications for kill switch, cooldown, TP/SL, margin"
+          icon={Bell}
+          actions={
+            pushPermState === 'denied' ? (
+              <Badge variant="outline" className="text-[10px] text-bear border-bear">
+                Blocked
+              </Badge>
+            ) : pushPermState === 'granted' ? (
+              <Badge variant="outline" className="text-[10px] text-bull border-bull">
+                Granted
+              </Badge>
+            ) : null
+          }
+        >
+          <div className="pt-3 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {pushEnabled ? (
+                  <ToggleRight className="h-5 w-5 text-bull" />
+                ) : (
+                  <ToggleLeft className="h-5 w-5 text-muted-foreground" />
+                )}
+                <div>
+                  <div className="text-sm font-medium">Enable Browser Push</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    Tampilkan notifikasi desktop / mobile saat event WS penting.
+                  </div>
+                </div>
+              </div>
+              <Switch
+                checked={pushEnabled}
+                disabled={!pushSupported || pushPermState === 'denied' || pushBusy}
+                onCheckedChange={handlePushToggle}
+              />
+            </div>
+
+            {!pushSupported && (
+              <div className="rounded-md border border-warn/30 bg-warn/5 p-2 text-[10px] text-warn">
+                Browser ini tidak mendukung Web Notifications + Push API. Gunakan Chrome / Edge /
+                Firefox terbaru dengan HTTPS.
+              </div>
+            )}
+
+            {pushSupported && pushPermState === 'denied' && (
+              <div className="rounded-md border border-bear/40 bg-bear/10 p-2 text-[10px] text-bear">
+                Permission notification diblokir. Buka Site Settings → Notifications → Allow.
+              </div>
+            )}
+
+            {pushEnabled && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs gap-1"
+                onClick={async () => {
+                  await showLocalNotification(
+                    '🔔 Test Notification — Scalping V2',
+                    'Kill switch / cooldown / TP / SL alerts aktif. Tutup tab ini untuk verifikasi background notification.',
+                    { tag: 'test-push' }
+                  );
+                  toast({ title: 'Test notification dispatched' });
+                }}
+              >
+                <TestTube2 className="h-3 w-3" />
+                Send Test Notification
+              </Button>
+            )}
+
+            <div className="text-[10px] text-muted-foreground">
+              Event yang dipicu: <strong>kill_switch_engaged</strong>,{' '}
+              <strong>cooldown_engaged</strong>, <strong>margin_warning</strong>,{' '}
+              <strong>tp1_hit</strong>, <strong>tp2_hit</strong>, <strong>sl_hit</strong>.
+              Subscription disimpan lokal — service worker (`/sw.js`) menangani display saat tab
+              tertutup.
+            </div>
           </div>
         </PanelCard>
 

@@ -56,6 +56,8 @@ from config import settings
 import config as cfg
 from mt5_connector import (
     MT5UnavailableError, MT5_AVAILABLE, get_connector,
+    get_connector_pool, reset_connector_pool,
+    get_market_depth, OrderRouter,
 )
 from database import (
     get_db, list_trades, list_signals, list_news, get_all_settings,
@@ -69,6 +71,9 @@ from database import (
     insert_risk_acknowledgment, get_latest_risk_acknowledgment,
     list_latency_samples,
     get_stress_test_result, insert_stress_test_result,
+    # BACKEND-100 #12 swap tracking
+    insert_swap_record, list_swap_records,
+    swap_summary_by_day, swap_summary_by_symbol,
 )
 from ollama_analyzer import get_analyzer, close_default_client as close_ai
 from tiingo_calendar import get_calendar, close_default_client as close_cal
@@ -77,6 +82,7 @@ from notifications import get_notification_manager, close_default_manager
 from indicators import (
     ema, ema_series, vwap, atr, adx, rsi, bollinger_bands,
     Candle, candle_pattern_detection,
+    volume_profile,
 )
 # Sprint 5/6/7/8 new modules
 from auth import (
@@ -88,17 +94,22 @@ from metrics import (
     MetricsMiddleware, RequestIDMiddleware, update_trading_metrics,
     render_metrics, REQUEST_ID_CTX, trading_total_trades,
     trading_signals_generated, trading_kill_switch_triggered,
+    get_uptime_seconds, get_system_info, update_process_metrics,
 )
 from risk_analytics import (
     calculate_var, calculate_cvar, get_returns_from_trades,
+    realized_volatility, volatility_surface,
+    rolling_correlation, correlation_matrix,
 )
 from stress_test import StressTester, STRESS_SCENARIOS
-from backtest import MonteCarloEngine, WalkForwardAnalyzer
+from backtest import MonteCarloEngine, WalkForwardAnalyzer, TickBacktestEngine
 from regulatory_id import (
     calculate_pph_forex, format_spt_year, check_bappebti_compliance,
     BAPPEBTI_REQUIREMENTS, BAPPEBTI_REGISTERED_BROKERS,
 )
 from risk_manager import KellySizer
+# BACKEND-100 new modules
+from market_analysis import currency_strength as calc_currency_strength
 
 # --------------------------------------------------------------------------- #
 # Logging - structured JSON (Sprint 8 #20)
@@ -203,6 +214,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # FastAPI app
 # --------------------------------------------------------------------------- #
 
+# ---- BACKEND-100 #16: OpenAPI tag metadata --------------------------------- #
+tags_metadata: list[dict[str, str]] = [
+    {"name": "auth", "description": "Authentication (login, /me, secrets)."},
+    {"name": "bot", "description": "Bot lifecycle (start/stop/kill, mode, dry-run)."},
+    {"name": "signals", "description": "Strategy signals + market scans."},
+    {"name": "positions", "description": "Open positions, equity curve, drawdown."},
+    {"name": "journal", "description": "Trade history + emotional-state tags."},
+    {"name": "news", "description": "Economic calendar + AI sentiment tagging."},
+    {"name": "ai", "description": "Ollama chat + setup compliance analysis."},
+    {"name": "analytics",
+     "description": "Risk analytics (VaR, stress, attribution, vol surface, correlation)."},
+    {"name": "backtest", "description": "Backtest, Monte Carlo, walk-forward, tick backtest."},
+    {"name": "settings", "description": "Key/value settings + secrets CRUD."},
+    {"name": "system",
+     "description": "Health checks, metrics, system info, broker status."},
+    {"name": "market-data",
+     "description": "Candles, indicators, volume profile, currency strength, order flow."},
+    {"name": "swaps", "description": "Daily swap / rollover reports (BACKEND-100 #12)."},
+    {"name": "regulatory",
+     "description": "BAPPEBTI compliance, tax export (SPT)."},
+]
+
 app = FastAPI(
     title="Forex Scalping Backend (V2)",
     description="Automated Forex scalping trading system - V2 strategy. "
@@ -210,6 +243,15 @@ app = FastAPI(
                 "(llama3.2:latest) and Tiingo economic calendar.",
     version="1.0.0",
     lifespan=lifespan,
+    openapi_tags=tags_metadata,
+    contact={
+        "name": "Forex Scalping V2",
+        "url": "https://github.com/your-org/forex-scalping-v2",
+    },
+    license_info={
+        "name": "Educational / personal use",
+        "url": "https://opensource.org/license/mit",
+    },
 )
 
 # ---- Sprint 5 #4: rate limiter (slowapi) ---------------------------------- #
@@ -457,7 +499,10 @@ def _safe_call(func: Any, *args: Any, **kwargs: Any) -> Any:
 # REST routes
 # --------------------------------------------------------------------------- #
 
-@app.get("/")
+@app.get("/",
+         tags=["system"],
+         summary="Service root",
+         description="Returns the service name, version, and MT5 connection status.")
 async def root() -> dict[str, Any]:
     """Health-check root."""
     return {
@@ -471,60 +516,170 @@ async def root() -> dict[str, Any]:
     }
 
 
-@app.get("/healthz")
+@app.get("/healthz",
+         tags=["system"],
+         summary="Liveness probe",
+         description="Returns 200 if the process is alive. Lightweight - "
+                     "no dependency checks.",
+         responses={
+             200: {"description": "Process alive"},
+             503: {"description": "Process not ready"},
+         })
 async def healthz() -> dict[str, Any]:
-    """Liveness probe - return 200 if the process is alive (Sprint 8 #20)."""
-    return {"status": "alive", "ts": datetime.now(timezone.utc).isoformat()}
+    """Liveness probe - return 200 if the process is alive (Sprint 8 #20).
+
+    BACKEND-100 #17: extended with uptime + version.
+    """
+    return {
+        "status": "ok",
+        "uptime_s": round(get_uptime_seconds(), 1),
+        "version": "1.0.0",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
 
 
-@app.get("/readyz")
+@app.get("/readyz",
+         tags=["system"],
+         summary="Readiness probe (detailed)",
+         description="Returns 200 with detailed dependency checks: DB, MT5, "
+                     "Ollama, Tiingo, memory, disk.  Returns 503 if any "
+                     "critical dependency is down.",
+         responses={
+             200: {"description": "All dependencies ready"},
+             503: {"description": "One or more dependencies down"},
+         })
 async def readyz() -> dict[str, Any]:
     """Readiness probe - return 200 if DB + MT5 + Ollama are all available.
 
-    Returns 503 if any critical dependency is down (Sprint 8 #20).
+    BACKEND-100 #17: now includes memory + disk + extended dependency
+    latency info.
     """
     ok = True
     parts: dict[str, Any] = {}
+    # ---- DB ---- #
+    t0 = asyncio.get_event_loop().time()
     try:
         get_db()
-        parts["db"] = "ok"
+        latency_ms = (asyncio.get_event_loop().time() - t0) * 1000.0
+        parts["db"] = {"ok": True, "latency_ms": round(latency_ms, 2)}
     except Exception as exc:
         ok = False
-        parts["db"] = f"error: {exc}"
+        parts["db"] = {"ok": False, "error": str(exc)}
+    # ---- MT5 ---- #
     if MT5_AVAILABLE:
         try:
-            parts["mt5"] = "ok" if get_connector().connected else "disconnected"
-            if not get_connector().connected:
+            conn = get_connector()
+            connected = conn.connected
+            try:
+                server = conn.config.mt5.server
+            except Exception:
+                server = "?"
+            parts["mt5"] = {"ok": connected, "server": server}
+            if not connected:
                 ok = False
         except Exception as exc:
             ok = False
-            parts["mt5"] = f"error: {exc}"
+            parts["mt5"] = {"ok": False, "error": str(exc)}
     else:
-        parts["mt5"] = "not_installed"
+        parts["mt5"] = {"ok": False, "note": "MetaTrader5 package not installed"}
+    # ---- Ollama ---- #
     try:
         analyzer = get_analyzer()
         if await analyzer.is_available():
-            parts["ollama"] = "ok"
+            parts["ollama"] = {"ok": True, "model": settings.ollama.model}
         else:
-            parts["ollama"] = "unavailable"
+            parts["ollama"] = {"ok": False, "model": settings.ollama.model}
             ok = False
     except Exception as exc:
-        parts["ollama"] = f"error: {exc}"
+        parts["ollama"] = {"ok": False, "error": str(exc)}
         ok = False
-    body = {"ready": ok, "ts": datetime.now(timezone.utc).isoformat(), **parts}
+    # ---- Tiingo ---- #
+    try:
+        cal = get_calendar()
+        events = await cal.fetch_calendar(days_ahead=3, impact="HIGH")
+        parts["tiingo"] = {"ok": True, "events_cached": len(events)}
+    except Exception as exc:
+        parts["tiingo"] = {"ok": False, "error": str(exc)}
+        # Tiingo is non-fatal for readiness.
+    # ---- Memory + disk ---- #
+    try:
+        import os
+        import shutil
+        disk = shutil.disk_usage(os.getcwd())
+        parts["disk"] = {
+            "used_gb": round(disk.used / (1024 ** 3), 2),
+            "total_gb": round(disk.total / (1024 ** 3), 2),
+        }
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        import psutil  # type: ignore
+        vm = psutil.virtual_memory()
+        parts["memory"] = {
+            "used_mb": int((vm.total - vm.available) // (1024 * 1024)),
+            "total_mb": int(vm.total // (1024 * 1024)),
+        }
+    except ImportError:
+        try:
+            with open("/proc/meminfo", "r") as fh:
+                mem = {}
+                for line in fh:
+                    p = line.split(":")
+                    if len(p) == 2:
+                        mem[p[0].strip()] = int(p[1].split()[0])
+            parts["memory"] = {
+                "used_mb": (mem.get("MemTotal", 0) - mem.get("MemAvailable", 0)) // 1024,
+                "total_mb": mem.get("MemTotal", 0) // 1024,
+            }
+        except Exception:  # pragma: no cover
+            pass
+    body = {"ready": ok, "uptime_s": round(get_uptime_seconds(), 1),
+            "ts": datetime.now(timezone.utc).isoformat(), **parts}
     if not ok:
         return JSONResponse(status_code=503, content=body)
     return body
 
 
-@app.get("/metrics")
+@app.get("/metrics",
+         tags=["system"],
+         summary="Prometheus metrics",
+         description="Returns the Prometheus-formatted metrics payload. "
+                     "Includes HTTP request counters, trading gauges, "
+                     "process memory / CPU, and DB query durations "
+                     "(BACKEND-100 #17).",
+         responses={200: {"description": "Prometheus metrics text"}})
 async def metrics_endpoint() -> Response:
     """Prometheus metrics endpoint (Sprint 8 #20)."""
     body, content_type = render_metrics()
     return Response(content=body, media_type=content_type)
 
 
-@app.get("/api/status")
+@app.get("/api/system/info",
+         tags=["system"],
+         summary="System info",
+         description="Returns Python version, OS, hostname, CPU count, "
+                     "memory total, installed packages list, and uptime "
+                     "(BACKEND-100 #17).",
+         responses={
+             200: {"description": "System info dict"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("10/minute")
+async def api_system_info(request: Request,
+                          _auth: dict = Depends(get_api_key)
+                          ) -> dict[str, Any]:
+    """Return detailed host + Python + package info for ops dashboards."""
+    return get_system_info()
+
+
+@app.get("/api/status",
+         tags=["bot"],
+         summary="Bot status + MT5 connection",
+         description="Returns the engine state, account summary, bot "
+                     "state and MT5 connection status.",
+         responses={200: {"description": "Status dict"},
+                    401: {"description": "Authentication required"},
+                    429: {"description": "Rate limit exceeded"}})
 @limiter.limit("60/minute")
 async def api_status(request: Request,
                      _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -562,7 +717,13 @@ async def api_status(request: Request,
     return snap
 
 
-@app.get("/api/account")
+@app.get("/api/account",
+         tags=["bot"],
+         summary="MT5 account info",
+         description="Login, balance, equity, margin, leverage.",
+         responses={200: {"description": "Account info"},
+                    401: {"description": "Authentication required"},
+                    503: {"description": "MT5 unavailable"}})
 @limiter.limit("60/minute")
 async def api_account(request: Request,
                       _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -584,7 +745,12 @@ async def api_account(request: Request,
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/api/positions")
+@app.get("/api/positions",
+         tags=["positions"],
+         summary="Open positions",
+         description="List open MT5 positions, optionally filtered by symbol.",
+         responses={200: {"description": "Positions list"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_positions(request: Request,
                         symbol: str | None = None,
@@ -614,7 +780,12 @@ async def api_positions(request: Request,
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/api/signals")
+@app.get("/api/signals",
+         tags=["signals"],
+         summary="Recent signals",
+         description="Return the most recent strategy signals from SQLite.",
+         responses={200: {"description": "Signals list"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_signals(request: Request,
                       limit: int = 50,
@@ -625,7 +796,15 @@ async def api_signals(request: Request,
     return {"count": len(rows), "signals": rows}
 
 
-@app.post("/api/bot/start", response_model=BotActionResponse)
+@app.post("/api/bot/start",
+         response_model=BotActionResponse,
+         tags=["bot"],
+         summary="Start auto-trading",
+         description="Run the pre-live checklist, then start the trading loop.",
+         responses={200: {"description": "Started"},
+                    400: {"description": "Checklist failed"},
+                    401: {"description": "Authentication required"},
+                    403: {"description": "Risk disclosure missing/expired"}})
 @limiter.limit("10/minute")
 async def api_bot_start(request: Request,
                         _auth: dict = Depends(require_trader)
@@ -677,7 +856,13 @@ async def api_bot_start(request: Request,
     )
 
 
-@app.post("/api/bot/stop", response_model=BotActionResponse)
+@app.post("/api/bot/stop",
+         response_model=BotActionResponse,
+         tags=["bot"],
+         summary="Stop auto-trading",
+         description="Stop the trading loop (positions remain open).",
+         responses={200: {"description": "Stopped"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_bot_stop(request: Request,
                        _auth: dict = Depends(require_trader)
@@ -688,7 +873,13 @@ async def api_bot_stop(request: Request,
     return BotActionResponse(ok=result["ok"], message=result["message"])
 
 
-@app.post("/api/bot/kill", response_model=BotActionResponse)
+@app.post("/api/bot/kill",
+         response_model=BotActionResponse,
+         tags=["bot"],
+         summary="Emergency kill switch",
+         description="Close ALL positions, stop the loop, and lock the bot.",
+         responses={200: {"description": "Killed"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_bot_kill(request: Request,
                        _auth: dict = Depends(require_trader)
@@ -704,7 +895,13 @@ async def api_bot_kill(request: Request,
     return BotActionResponse(ok=result["ok"], message=msg)
 
 
-@app.post("/api/bot/release-kill", response_model=BotActionResponse)
+@app.post("/api/bot/release-kill",
+         response_model=BotActionResponse,
+         tags=["bot"],
+         summary="Release kill switch",
+         description="Manual override to release an engaged kill switch.",
+         responses={200: {"description": "Released"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_bot_release_kill(request: Request,
                                _auth: dict = Depends(require_trader)
@@ -722,7 +919,12 @@ async def api_bot_release_kill(request: Request,
 # Audit-fix Sprint 2 #12: Bot mode (LIVE / PAPER / DRY)
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/bot/mode")
+@app.post("/api/bot/mode",
+         tags=["bot"],
+         summary="Switch bot mode (LIVE/PAPER/DRY)",
+         responses={200: {"description": "Mode set"},
+                    400: {"description": "Invalid mode"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_bot_mode(request: Request,
                        req: BotModeRequest,
@@ -735,7 +937,11 @@ async def api_bot_mode(request: Request,
     return result
 
 
-@app.get("/api/bot/mode")
+@app.get("/api/bot/mode",
+         tags=["bot"],
+         summary="Get current bot mode",
+         responses={200: {"description": "Mode"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_bot_get_mode(request: Request,
                            _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -744,7 +950,13 @@ async def api_bot_get_mode(request: Request,
     return engine.get_mode()
 
 
-@app.post("/api/bot/dry-run")
+@app.post("/api/bot/dry-run",
+         tags=["bot"],
+         summary="Toggle dry-run mode",
+         description="When enabled, the bot generates signals but never "
+                     "places orders.",
+         responses={200: {"description": "Mode toggled"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_bot_dry_run(request: Request,
                           req: DryRunRequest,
@@ -762,7 +974,11 @@ async def api_bot_dry_run(request: Request,
 # Audit-fix Sprint 1 #10: Audit log endpoint
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/audit-log")
+@app.get("/api/audit-log",
+         tags=["system"],
+         summary="Query audit log",
+         responses={200: {"description": "Audit events"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_audit_log(request: Request,
                         limit: int = 200,
@@ -786,7 +1002,11 @@ async def api_audit_log(request: Request,
 # Sprint 6 #10: audit chain verification
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/audit-log/verify")
+@app.get("/api/audit-log/verify",
+         tags=["system"],
+         summary="Verify audit hash chain",
+         responses={200: {"description": "Chain valid"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_audit_log_verify(request: Request,
                                _auth: dict = Depends(get_api_key)
@@ -799,7 +1019,11 @@ async def api_audit_log_verify(request: Request,
 # Audit-fix Sprint 3 #19: Equity curve endpoint
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/equity-curve")
+@app.get("/api/equity-curve",
+         tags=["positions"],
+         summary="Equity curve time series",
+         responses={200: {"description": "Equity samples"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_equity_curve(request: Request,
                            hours: float = 24.0,
@@ -813,7 +1037,11 @@ async def api_equity_curve(request: Request,
 # Audit-fix Sprint 3 #20-21: Attribution + compliance
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/analytics/attribution")
+@app.get("/api/analytics/attribution",
+         tags=["analytics"],
+         summary="Performance attribution",
+         responses={200: {"description": "Attribution dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_attribution(request: Request,
                                     start: str | None = None,
@@ -828,7 +1056,11 @@ async def api_analytics_attribution(request: Request,
     return get_performance_attribution(start_dt, end_dt)
 
 
-@app.get("/api/analytics/compliance")
+@app.get("/api/analytics/compliance",
+         tags=["analytics"],
+         summary="Compliance score",
+         responses={200: {"description": "Compliance dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_compliance(request: Request,
                                    start: str | None = None,
@@ -847,7 +1079,12 @@ async def api_analytics_compliance(request: Request,
 # Audit-fix Sprint 3 #22: Emotional-state logging
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/trade/{trade_id}/emotion")
+@app.post("/api/trade/{trade_id}/emotion",
+          tags=["journal"],
+          summary="Tag trade with emotional state",
+          responses={200: {"description": "Tagged"},
+                     404: {"description": "Trade not found"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_trade_emotion(request: Request,
                             trade_id: int,
@@ -861,7 +1098,11 @@ async def api_trade_emotion(request: Request,
     return {"ok": True, "trade_id": trade_id, "state": req.state}
 
 
-@app.get("/api/analytics/emotions")
+@app.get("/api/analytics/emotions",
+         tags=["analytics"],
+         summary="Emotional-state summary",
+         responses={200: {"description": "Emotions summary"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_emotions(request: Request,
                                  limit: int = 200,
@@ -875,7 +1116,11 @@ async def api_analytics_emotions(request: Request,
 # Audit-fix Sprint 2 #15: Pre-live checklist
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/pre-live-check")
+@app.get("/api/pre-live-check",
+         tags=["system"],
+         summary="Pre-live readiness checklist",
+         responses={200: {"description": "Checklist dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_pre_live_check(request: Request,
                              _auth: dict = Depends(get_api_key)
@@ -976,7 +1221,11 @@ async def pre_live_check() -> dict[str, Any]:
 # Audit-fix Sprint 4 #27: NTP time-sync
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/time-sync")
+@app.get("/api/time-sync",
+         tags=["system"],
+         summary="NTP drift info",
+         responses={200: {"description": "Drift dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_time_sync(request: Request,
                         _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -1021,7 +1270,17 @@ async def check_ntp_sync() -> dict[str, Any]:
 # Audit-fix Sprint 4 #24: DB backup / restore
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/backup")
+@app.get("/api/backup",
+         tags=["system"],
+         summary="Download DB backup",
+         description="Stream the SQLite DB file as a downloadable backup. "
+                     "Backward-compatible plaintext path.",
+         responses={
+             200: {"description": "Backup file (octet-stream)"},
+             401: {"description": "Authentication required"},
+             403: {"description": "Admin role required"},
+             404: {"description": "DB file not found"},
+         })
 @limiter.limit("2/minute")
 async def api_backup(request: Request,
                      _auth: dict = Depends(require_admin)) -> StreamingResponse:
@@ -1041,7 +1300,104 @@ async def api_backup(request: Request,
     )
 
 
-@app.post("/api/restore")
+@app.post("/api/backup/offsite",
+          tags=["system"],
+          summary="Encrypted offsite backup",
+          description="Encrypt the SQLite DB with Fernet (SECRETS_MASTER_KEY) "
+                      "and optionally upload to AWS S3 if AWS_S3_BUCKET is "
+                      "configured.  Returns local path, encryption flag, "
+                      "S3 URL (if uploaded), and file size "
+                      "(BACKEND-100 #15).",
+          responses={
+              200: {"description": "Backup created + optionally uploaded"},
+              401: {"description": "Authentication required"},
+              403: {"description": "Admin role required"},
+              500: {"description": "Encryption or upload failure"},
+          })
+@limiter.limit("2/hour")
+async def api_backup_offsite(request: Request,
+                             _auth: dict = Depends(require_admin)
+                             ) -> dict[str, Any]:
+    """Encrypt the DB with Fernet and optionally upload to AWS S3.
+
+    BACKEND-100 #15: the backup is encrypted locally regardless of S3
+    upload status.  When ``AWS_S3_BUCKET`` is set, the encrypted blob is
+    also uploaded via boto3 (best-effort; failures return the local path
+    with ``s3_url=None`` and ``s3_error`` set).
+    """
+    db_path = Path(settings.paths.db_path)
+    if not db_path.exists():
+        raise HTTPException(status_code=404, detail="db file not found")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    backup_name = f"trading_backup_{timestamp}.db.enc"
+    backup_dir = db_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / backup_name
+    # Read the raw DB file.
+    raw = db_path.read_bytes()
+    size_raw = len(raw)
+    encrypted: bool = False
+    # Fernet encryption using SECRETS_MASTER_KEY (if available).
+    master_key = cfg.SECRETS_MASTER_KEY
+    if master_key:
+        try:
+            from cryptography.fernet import Fernet
+            f = Fernet(master_key.encode() if isinstance(master_key, str)
+                       else master_key)
+            blob = f.encrypt(raw)
+            backup_path.write_bytes(blob)
+            encrypted = True
+        except Exception as exc:
+            logger.error("Backup encryption failed: %s", exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"encryption failed: {exc}",
+            )
+    else:
+        # No master key configured - write plaintext and warn.
+        backup_path.write_bytes(raw)
+        logger.warning("SECRETS_MASTER_KEY not set - backup written "
+                       "UNENCRYPTED to %s", backup_path)
+    size_bytes = backup_path.stat().st_size
+    result: dict[str, Any] = {
+        "local_path": str(backup_path),
+        "encrypted": encrypted,
+        "size_bytes": size_bytes,
+        "size_raw_bytes": size_raw,
+        "s3_url": None,
+        "s3_error": None,
+    }
+    # Optional S3 upload.
+    bucket = cfg.AWS_S3_BUCKET
+    if bucket:
+        try:
+            import boto3  # type: ignore
+            s3 = boto3.client(
+                "s3",
+                region_name=cfg.AWS_S3_REGION,
+                aws_access_key_id=cfg.AWS_ACCESS_KEY_ID or None,
+                aws_secret_access_key=cfg.AWS_SECRET_ACCESS_KEY or None,
+            )
+            key = f"backups/{backup_name}"
+            s3.upload_file(str(backup_path), bucket, key)
+            result["s3_url"] = f"s3://{bucket}/{key}"
+            result["s3_bucket"] = bucket
+            result["s3_key"] = key
+            logger.info("Backup uploaded to %s", result["s3_url"])
+        except ImportError:
+            result["s3_error"] = "boto3 not installed - run: pip install boto3"
+        except Exception as exc:
+            logger.error("S3 upload failed: %s", exc)
+            result["s3_error"] = str(exc)
+    return result
+
+
+@app.post("/api/restore",
+          tags=["system"],
+          summary="Restore DB from uploaded backup",
+          responses={200: {"description": "Restored"},
+                     401: {"description": "Authentication required"},
+                     403: {"description": "Admin role required"}})
 @limiter.limit("2/minute")
 async def api_restore(request: Request,
                       file: UploadFile,
@@ -1066,7 +1422,12 @@ async def api_restore(request: Request,
 # Audit-fix Sprint 4 #25: PDF weekly journal export
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/export/pdf")
+@app.get("/api/export/pdf",
+         tags=["regulatory"],
+         summary="Weekly PDF journal export",
+         responses={200: {"description": "PDF file"},
+                    401: {"description": "Authentication required"},
+                    503: {"description": "reportlab not installed"}})
 @limiter.limit("5/minute")
 async def api_export_pdf(request: Request,
                          week_start: str,
@@ -1092,7 +1453,13 @@ async def api_export_pdf(request: Request,
 # Audit-fix Sprint 4 #26: Tax CSV export
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/export/tax")
+@app.get("/api/export/tax",
+         tags=["regulatory"],
+         summary="Tax CSV export (FIFO)",
+         description="Returns a CSV of closed trades for the given year. "
+                     "Use ``?format=spt`` for the SPT layout with PPh 0.1%.",
+         responses={200: {"description": "CSV file"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_export_tax(request: Request,
                          year: int,
@@ -1189,7 +1556,11 @@ If you do not understand these risks, do not enable auto-trading.
 RISK_DISCLOSURE_VERSION = "v2.0-2026"
 
 
-@app.get("/api/risk-disclosure")
+@app.get("/api/risk-disclosure",
+         tags=["regulatory"],
+         summary="Risk disclosure text + version",
+         responses={200: {"description": "Disclosure text"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_risk_disclosure(request: Request,
                               _auth: dict = Depends(get_api_key)
@@ -1201,7 +1572,11 @@ async def api_risk_disclosure(request: Request,
 
 # ---- Sprint 6 #9: signed risk acknowledgment ----------------------------- #
 
-@app.post("/api/risk-disclosure/acknowledge")
+@app.post("/api/risk-disclosure/acknowledge",
+          tags=["regulatory"],
+          summary="Acknowledge risk disclosure",
+          responses={200: {"description": "Acknowledged"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_risk_disclosure_ack(request: Request,
                                   req: RiskAcknowledgmentRequest,
@@ -1231,7 +1606,11 @@ async def api_risk_disclosure_ack(request: Request,
     }
 
 
-@app.get("/api/risk-disclosure/status")
+@app.get("/api/risk-disclosure/status",
+         tags=["regulatory"],
+         summary="Risk disclosure acknowledgment status",
+         responses={200: {"description": "Status dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_risk_disclosure_status(request: Request,
                                      _auth: dict = Depends(get_api_key)
@@ -1267,7 +1646,11 @@ async def api_risk_disclosure_status(request: Request,
 # Audit-fix Sprint 4 #29: Real probes (test buttons)
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/test/mt5")
+@app.get("/api/test/mt5",
+         tags=["system"],
+         summary="Probe MT5 connection",
+         responses={200: {"description": "Probe result"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_test_mt5(request: Request,
                        _auth: dict = Depends(require_trader)) -> dict[str, Any]:
@@ -1294,7 +1677,11 @@ async def api_test_mt5(request: Request,
         return {"ok": False, "message": str(exc), "latency_ms": 0.0}
 
 
-@app.get("/api/test/ollama")
+@app.get("/api/test/ollama",
+         tags=["system"],
+         summary="Probe Ollama daemon",
+         responses={200: {"description": "Probe result"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_test_ollama(request: Request,
                           _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -1315,7 +1702,11 @@ async def api_test_ollama(request: Request,
         return {"ok": False, "message": str(exc), "latency_ms": 0.0}
 
 
-@app.get("/api/test/tiingo")
+@app.get("/api/test/tiingo",
+         tags=["system"],
+         summary="Probe Tiingo API",
+         responses={200: {"description": "Probe result"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("10/minute")
 async def api_test_tiingo(request: Request,
                           _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -1339,7 +1730,11 @@ async def api_test_tiingo(request: Request,
 # Audit-fix Sprint 4 #30: Telegram test
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/notifications/test")
+@app.post("/api/notifications/test",
+          tags=["system"],
+          summary="Send test Telegram message",
+          responses={200: {"description": "Sent"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_notifications_test(request: Request,
                                  _auth: dict = Depends(require_trader)
@@ -1359,7 +1754,12 @@ async def api_notifications_test(request: Request,
 # Audit-fix Sprint 2 #11: Backtest endpoints
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/backtest")
+@app.post("/api/backtest",
+          tags=["backtest"],
+          summary="Run candle backtest",
+          responses={200: {"description": "Result dict"},
+                     400: {"description": "Invalid request"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("2/hour")
 async def api_backtest(request: Request,
                        req: BacktestRequest,
@@ -1400,7 +1800,12 @@ async def api_backtest(request: Request,
     return {"id": result_id, **result_dict}
 
 
-@app.get("/api/backtest/results/{result_id}")
+@app.get("/api/backtest/results/{result_id}",
+         tags=["backtest"],
+         summary="Get saved backtest result",
+         responses={200: {"description": "Result dict"},
+                    404: {"description": "Not found"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_backtest_result(request: Request,
                               result_id: int,
@@ -1416,7 +1821,11 @@ async def api_backtest_result(request: Request,
 # Sprint 7 #15: Monte Carlo + Walk-Forward endpoints
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/backtest/monte-carlo")
+@app.post("/api/backtest/monte-carlo",
+          tags=["backtest"],
+          summary="Monte Carlo bootstrap simulation",
+          responses={200: {"description": "MC stats"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("5/hour")
 async def api_backtest_monte_carlo(request: Request,
                                   req: MonteCarloRequest,
@@ -1446,7 +1855,11 @@ async def api_backtest_monte_carlo(request: Request,
     }
 
 
-@app.post("/api/backtest/walk-forward")
+@app.post("/api/backtest/walk-forward",
+          tags=["backtest"],
+          summary="Walk-forward optimization",
+          responses={200: {"description": "WF windows"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("5/hour")
 async def api_backtest_walk_forward(request: Request,
                                     req: WalkForwardRequest,
@@ -1470,7 +1883,11 @@ async def api_backtest_walk_forward(request: Request,
 # Audit-fix Sprint 2 #17: Holiday calendar endpoint
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/holidays")
+@app.get("/api/holidays",
+         tags=["news"],
+         summary="FX market holidays",
+         responses={200: {"description": "Holidays list"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_holidays(request: Request,
                        year: int | None = None,
@@ -1480,7 +1897,11 @@ async def api_holidays(request: Request,
     return {"year": year, "holidays": list_holidays(year)}
 
 
-@app.get("/api/news")
+@app.get("/api/news",
+         tags=["news"],
+         summary="Economic calendar (Tiingo)",
+         responses={200: {"description": "Events list"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_news(request: Request,
                    impact: str | None = "HIGH",
@@ -1507,7 +1928,12 @@ async def api_news(request: Request,
     }
 
 
-@app.post("/api/ai/analyze")
+@app.post("/api/ai/analyze",
+          tags=["ai"],
+          summary="AI compliance analysis of a setup",
+          responses={200: {"description": "Verdict"},
+                     503: {"description": "Ollama unavailable"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_ai_analyze(request: Request,
                          req: AnalyzeRequest,
@@ -1537,7 +1963,12 @@ async def api_ai_analyze(request: Request,
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/api/ai/chat")
+@app.post("/api/ai/chat",
+          tags=["ai"],
+          summary="Chat with Ollama",
+          responses={200: {"description": "Reply"},
+                     503: {"description": "Ollama unavailable"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_ai_chat(request: Request,
                       req: ChatRequest,
@@ -1559,7 +1990,11 @@ async def api_ai_chat(request: Request,
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.get("/api/ai/chat/stream")
+@app.get("/api/ai/chat/stream",
+         tags=["ai"],
+         summary="Streaming chat (SSE)",
+         responses={200: {"description": "SSE stream"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("5/minute")
 async def api_ai_chat_stream(request: Request,
                              message: str,
@@ -1580,7 +2015,11 @@ async def api_ai_chat_stream(request: Request,
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
-@app.get("/api/journal")
+@app.get("/api/journal",
+         tags=["journal"],
+         summary="Trade history",
+         responses={200: {"description": "Trades list"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_journal(request: Request,
                       limit: int = 100,
@@ -1592,7 +2031,11 @@ async def api_journal(request: Request,
     return {"count": len(rows), "trades": rows}
 
 
-@app.get("/api/settings")
+@app.get("/api/settings",
+         tags=["settings"],
+         summary="Get all settings",
+         responses={200: {"description": "Settings dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("60/minute")
 async def api_get_settings(request: Request,
                            _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -1600,7 +2043,11 @@ async def api_get_settings(request: Request,
     return {"settings": get_all_settings()}
 
 
-@app.post("/api/settings")
+@app.post("/api/settings",
+          tags=["settings"],
+          summary="Update settings",
+          responses={200: {"description": "Updated"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_update_settings(request: Request,
                               req: SettingsUpdate,
@@ -1612,7 +2059,14 @@ async def api_update_settings(request: Request,
     return {"ok": True, "settings": get_all_settings()}
 
 
-@app.get("/api/chart/{symbol}")
+@app.get("/api/chart/{symbol}",
+         tags=["market-data"],
+         summary="Candles + indicators",
+         description="Return OHLCV candles plus EMA9/21, VWAP, ATR, ADX, "
+                     "RSI, Bollinger Bands and the latest candle pattern.",
+         responses={200: {"description": "Chart data"},
+                    401: {"description": "Authentication required"},
+                    503: {"description": "MT5 unavailable"}})
 @limiter.limit("60/minute")
 async def api_chart(request: Request,
                     symbol: str,
@@ -1788,7 +2242,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 # Sprint 5 #6: auth login + me endpoints
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/auth/login")
+@app.post("/api/auth/login",
+          tags=["auth"],
+          summary="Login (exchange credentials for API key)",
+          responses={200: {"description": "API key"},
+                     401: {"description": "Invalid credentials"}})
 @limiter.limit("10/minute")
 async def api_auth_login(request: Request,
                          req: LoginRequest) -> dict[str, Any]:
@@ -1811,7 +2269,11 @@ async def api_auth_login(request: Request,
     }
 
 
-@app.get("/api/auth/me")
+@app.get("/api/auth/me",
+         tags=["auth"],
+         summary="Current user info",
+         responses={200: {"description": "User dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_auth_me(request: Request,
                       _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
@@ -1832,7 +2294,12 @@ async def api_auth_me(request: Request,
 # Sprint 5 #3: secrets CRUD endpoints (admin only)
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/secrets")
+@app.get("/api/secrets",
+         tags=["auth"],
+         summary="List stored secret names",
+         responses={200: {"description": "Names list"},
+                    401: {"description": "Authentication required"},
+                    403: {"description": "Admin role required"}})
 @limiter.limit("30/minute")
 async def api_list_secrets(request: Request,
                            _auth: dict = Depends(require_admin)
@@ -1844,7 +2311,13 @@ async def api_list_secrets(request: Request,
             "encryption_enabled": sm.enabled}
 
 
-@app.get("/api/secrets/{name}")
+@app.get("/api/secrets/{name}",
+         tags=["auth"],
+         summary="Get secret value",
+         responses={200: {"description": "Secret value"},
+                    404: {"description": "Not found"},
+                    401: {"description": "Authentication required"},
+                    403: {"description": "Admin role required"}})
 @limiter.limit("30/minute")
 async def api_get_secret(request: Request,
                          name: str,
@@ -1858,7 +2331,12 @@ async def api_get_secret(request: Request,
     return {"name": name, "value": val}
 
 
-@app.post("/api/secrets/{name}")
+@app.post("/api/secrets/{name}",
+          tags=["auth"],
+          summary="Store (encrypt) a secret",
+          responses={200: {"description": "Stored"},
+                     401: {"description": "Authentication required"},
+                     403: {"description": "Admin role required"}})
 @limiter.limit("10/minute")
 async def api_store_secret(request: Request,
                            name: str,
@@ -1871,7 +2349,12 @@ async def api_store_secret(request: Request,
     return {"ok": True, "name": name, "encryption_enabled": sm.enabled}
 
 
-@app.delete("/api/secrets/{name}")
+@app.delete("/api/secrets/{name}",
+           tags=["auth"],
+           summary="Delete a secret",
+           responses={200: {"description": "Deleted"},
+                      401: {"description": "Authentication required"},
+                      403: {"description": "Admin role required"}})
 @limiter.limit("10/minute")
 async def api_delete_secret(request: Request,
                             name: str,
@@ -1887,7 +2370,11 @@ async def api_delete_secret(request: Request,
 # Sprint 6 #11: BAPPEBTI compliance + regulatory status
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/regulatory/bappebti-status")
+@app.get("/api/regulatory/bappebti-status",
+         tags=["regulatory"],
+         summary="BAPPEBTI compliance status",
+         responses={200: {"description": "Compliance dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_bappebti_status(request: Request,
                               broker: str | None = None,
@@ -1902,7 +2389,11 @@ async def api_bappebti_status(request: Request,
 # Sprint 6 #12: trade reconstruction endpoint
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/trade/{trade_id}/reconstruct")
+@app.get("/api/trade/{trade_id}/reconstruct",
+         tags=["journal"],
+         summary="Trade event timeline reconstruction",
+         responses={200: {"description": "Events timeline"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_trade_reconstruct(request: Request,
                                 trade_id: int,
@@ -1917,7 +2408,11 @@ async def api_trade_reconstruct(request: Request,
 # Sprint 7 #13: VaR + CVaR endpoint
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/analytics/var")
+@app.get("/api/analytics/var",
+         tags=["analytics"],
+         summary="Value-at-Risk + CVaR",
+         responses={200: {"description": "VaR/CVaR dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_var(request: Request,
                             confidence: float = 0.95,
@@ -1946,7 +2441,11 @@ async def api_analytics_var(request: Request,
 # Sprint 7 #14: stress test endpoints
 # --------------------------------------------------------------------------- #
 
-@app.post("/api/analytics/stress-test")
+@app.post("/api/analytics/stress-test",
+          tags=["analytics"],
+          summary="Run all 4 stress scenarios",
+          responses={200: {"description": "Results"},
+                     401: {"description": "Authentication required"}})
 @limiter.limit("5/hour")
 async def api_analytics_stress_test(request: Request,
                                     req: StressTestRequest,
@@ -1971,7 +2470,12 @@ async def api_analytics_stress_test(request: Request,
             "trades_used": len(trades)}
 
 
-@app.get("/api/analytics/stress-test/results/{result_id}")
+@app.get("/api/analytics/stress-test/results/{result_id}",
+         tags=["analytics"],
+         summary="Get saved stress-test result",
+         responses={200: {"description": "Result"},
+                    404: {"description": "Not found"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_stress_test_result(request: Request,
                                  result_id: int,
@@ -1988,7 +2492,11 @@ async def api_stress_test_result(request: Request,
 # Sprint 7 #16: Kelly criterion endpoint
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/analytics/kelly")
+@app.get("/api/analytics/kelly",
+         tags=["analytics"],
+         summary="Kelly criterion stats",
+         responses={200: {"description": "Kelly dict"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_kelly(request: Request,
                               balance: float = 10_000.0,
@@ -2015,7 +2523,11 @@ async def api_analytics_kelly(request: Request,
 # Sprint 7 #17: slippage + latency analytics
 # --------------------------------------------------------------------------- #
 
-@app.get("/api/analytics/slippage")
+@app.get("/api/analytics/slippage",
+         tags=["analytics"],
+         summary="Slippage stats per symbol",
+         responses={200: {"description": "Slippage stats"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_slippage(request: Request,
                                  days: int = 30,
@@ -2052,7 +2564,11 @@ async def api_analytics_slippage(request: Request,
     return {"days": days, "by_symbol": out, "total_samples": len(recent)}
 
 
-@app.get("/api/analytics/latency")
+@app.get("/api/analytics/latency",
+         tags=["analytics"],
+         summary="Latency samples + percentiles",
+         responses={200: {"description": "Latency stats"},
+                    401: {"description": "Authentication required"}})
 @limiter.limit("30/minute")
 async def api_analytics_latency(request: Request,
                                 hours: float = 24.0,
@@ -2089,6 +2605,469 @@ async def api_analytics_latency(request: Request,
             "p99": round(p99_latency, 2),
         },
     }
+
+
+@app.post("/api/backtest/tick",
+          tags=["backtest"],
+          summary="Tick-level backtest",
+          description="Run a tick-driven backtest that detects intra-candle "
+                      "SL / TP fills (vs candle-close only).  Synthesises "
+                      "ticks from M5 candles if real tick data isn't "
+                      "supplied (BACKEND-100 #9).",
+          responses={
+              200: {"description": "Backtest result dict"},
+              400: {"description": "Invalid request body"},
+              401: {"description": "Authentication required"},
+          })
+@limiter.limit("2/hour")
+async def api_backtest_tick(request: Request,
+                            req: BacktestRequest,
+                            _auth: dict = Depends(require_trader)
+                            ) -> dict[str, Any]:
+    """Run a tick-driven backtest (BACKEND-100 #9)."""
+    engine = TickBacktestEngine()
+    # When MT5 is connected, attempt to fetch real tick data; otherwise
+    # the engine will synthesise ticks from candles (if candles supplied).
+    candles_m5: list[dict[str, Any]] | None = None
+    if MT5_AVAILABLE and get_connector().connected:
+        try:
+            sym = SymbolValidator.validate(req.symbol)
+            mt5_sym = settings.symbol_for(sym)
+            bars = _safe_call(get_connector().get_candles,
+                              mt5_sym, req.timeframe, 2000)
+            candles_m5 = [
+                {"time": b.time, "open": b.open, "high": b.high,
+                 "low": b.low, "close": b.close, "volume": b.volume,
+                 "day": b.day}
+                for b in bars
+            ]
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("Tick backtest: candle fetch failed: %s", exc)
+    result = engine.run_tick_backtest(
+        symbol=req.symbol,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        initial_balance=req.initial_balance,
+        candles_m5=candles_m5,
+    )
+    result_dict = result.to_dict()
+    result_dict["engine"] = "tick"
+    return result_dict
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #1: multi-broker status endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/broker/status",
+         tags=["system"],
+         summary="Multi-broker status (primary + secondary + active)",
+         description="Return the connection status of the primary and "
+                     "secondary MT5 brokers and which one is currently "
+                     "active (BACKEND-100 #1).",
+         responses={
+             200: {"description": "Broker status dict"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("60/minute")
+async def api_broker_status(request: Request,
+                            _auth: dict = Depends(get_api_key)
+                            ) -> dict[str, Any]:
+    """Return primary/secondary broker connection state."""
+    pool = get_connector_pool()
+    return pool.status()
+
+
+@app.post("/api/broker/failover",
+          tags=["system"],
+          summary="Force failover to secondary broker",
+          description="Manually fail over from primary to secondary broker "
+                      "(if a secondary is configured).  Returns 400 if no "
+                      "secondary is configured (BACKEND-100 #1).",
+          responses={
+              200: {"description": "Failover succeeded"},
+              400: {"description": "No secondary broker configured"},
+              401: {"description": "Authentication required"},
+              403: {"description": "Admin role required"},
+          })
+@limiter.limit("2/hour")
+async def api_broker_failover(request: Request,
+                              _auth: dict = Depends(require_admin)
+                              ) -> dict[str, Any]:
+    """Manually fail over to the secondary broker."""
+    pool = get_connector_pool()
+    ok = await asyncio.to_thread(pool.failover)
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail="No secondary broker configured or failover failed.",
+        )
+    return {"ok": True, "status": pool.status()}
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #2: Volume profile endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/volume-profile/{symbol}",
+         tags=["market-data"],
+         summary="Volume profile (POC / VAH / VAL)",
+         description="Compute the volume profile for the last ``lookback`` "
+                     "candles of ``symbol``.  Returns Point-of-Control "
+                     "(POC), Value Area High (VAH), Value Area Low (VAL), "
+                     "and the price-volume histogram (BACKEND-100 #2).",
+         responses={
+             200: {"description": "VolumeProfile dict"},
+             401: {"description": "Authentication required"},
+             503: {"description": "MT5 unavailable"},
+         })
+@limiter.limit("30/minute")
+async def api_volume_profile(request: Request,
+                             symbol: str,
+                             lookback: int = 70,
+                             bins: int = 50,
+                             timeframe: str = "M5",
+                             _auth: dict = Depends(get_api_key)
+                             ) -> dict[str, Any]:
+    """Return the volume profile for ``symbol``."""
+    if not MT5_AVAILABLE or not get_connector().connected:
+        return _mt5_unavailable_response()  # type: ignore[return-value]
+    sym = SymbolValidator.validate(symbol)
+    mt5_sym = settings.symbol_for(sym)
+    try:
+        bars = _safe_call(get_connector().get_candles,
+                          mt5_sym, timeframe, max(lookback, 100))
+        candles = [Candle(time=b.time, open=b.open, high=b.high, low=b.low,
+                          close=b.close, volume=b.volume, day=b.day)
+                   for b in bars]
+        vp = volume_profile(candles, lookback=lookback, bins=bins)
+        return {
+            "symbol": sym,
+            "lookback": lookback,
+            "bins": bins,
+            "poc_price": vp.poc_price,
+            "vah": vp.vah,
+            "val": vp.val,
+            "histogram": [{"price": p, "volume": v}
+                          for p, v in vp.histogram],
+        }
+    except HTTPException as exc:
+        raise exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #3: Currency strength meter
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/market/currency-strength",
+         tags=["market-data"],
+         summary="Currency strength meter (8 majors)",
+         description="Decompose % change of each FX pair into per-currency "
+                     "strength via least-squares, then rank the 8 majors "
+                     "(USD, EUR, GBP, JPY, CHF, AUD, CAD, NZD) strongest "
+                     "to weakest (BACKEND-100 #3).",
+         responses={
+             200: {"description": "Ranked list of currency strengths"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_currency_strength(request: Request,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """Return the ranked currency-strength meter across configured pairs."""
+    pairs_data: dict[str, Candle] = {}
+    if MT5_AVAILABLE and get_connector().connected:
+        for pair, mt5_sym in zip(settings.pairs, settings.mt5_symbols):
+            try:
+                bars = _safe_call(get_connector().get_candles,
+                                  mt5_sym, "M5", 50)
+                if bars:
+                    last = bars[-1]
+                    pairs_data[pair] = Candle(
+                        time=last.time, open=last.open, high=last.high,
+                        low=last.low, close=last.close, volume=last.volume,
+                        day=last.day,
+                    )
+            except Exception as exc:  # pragma: no cover
+                logger.debug("currency_strength: skip %s: %s", pair, exc)
+    strengths = calc_currency_strength(pairs_data)
+    return {
+        "count": len(strengths),
+        "strengths": [
+            {"currency": s.currency, "strength": s.strength,
+             "rank": s.rank, "change_pct": s.change_pct}
+            for s in strengths
+        ],
+        "source": "mt5" if pairs_data else "empty",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #4: Order flow / L2 depth endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/order-flow/{symbol}",
+         tags=["market-data"],
+         summary="Order flow (Level-2 depth)",
+         description="Return the Level-2 order book for ``symbol`` if the "
+                     "broker supports it.  Most retail FX brokers don't "
+                     "expose L2 - in that case the endpoint returns "
+                     "{supported: false, levels: null} (BACKEND-100 #4).",
+         responses={
+             200: {"description": "Order book or unsupported marker"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("60/minute")
+async def api_order_flow(request: Request,
+                         symbol: str,
+                         _auth: dict = Depends(get_api_key)
+                         ) -> dict[str, Any]:
+    """Return the L2 order book for ``symbol`` (or mark as unsupported)."""
+    sym = SymbolValidator.validate(symbol)
+    mt5_sym = settings.symbol_for(sym)
+    if not MT5_AVAILABLE or not get_connector().connected:
+        return {"symbol": sym, "supported": False, "levels": None,
+                "reason": "mt5_unavailable"}
+    try:
+        levels = await asyncio.to_thread(get_market_depth, mt5_sym)
+    except Exception as exc:
+        logger.debug("order_flow(%s) failed: %s", sym, exc)
+        levels = None
+    if levels is None:
+        return {"symbol": sym, "supported": False, "levels": None,
+                "reason": "broker_or_symbol_no_L2"}
+    return {
+        "symbol": sym,
+        "supported": True,
+        "levels": [
+            {"price": lvl.price, "volume": lvl.volume,
+             "side": lvl.side, "type": lvl.type}
+            for lvl in levels
+        ],
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #5: Volatility surface endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/analytics/volatility-surface/{symbol}",
+         tags=["analytics"],
+         summary="Volatility surface",
+         description="Return the annualised realised volatility across "
+                     "multiple lookback tenors (1, 5, 10, 20, 60 days) "
+                     "for ``symbol`` (BACKEND-100 #5).",
+         responses={
+             200: {"description": "Vol surface list"},
+             401: {"description": "Authentication required"},
+             503: {"description": "MT5 unavailable"},
+         })
+@limiter.limit("30/minute")
+async def api_volatility_surface(request: Request,
+                                 symbol: str,
+                                 timeframe: str = "D1",
+                                 count: int = 200,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Compute the volatility surface across tenors."""
+    if not MT5_AVAILABLE or not get_connector().connected:
+        return _mt5_unavailable_response()  # type: ignore[return-value]
+    sym = SymbolValidator.validate(symbol)
+    mt5_sym = settings.symbol_for(sym)
+    try:
+        bars = _safe_call(get_connector().get_candles,
+                          mt5_sym, timeframe, count)
+        surface = volatility_surface([
+            {"open": b.open, "high": b.high, "low": b.low,
+             "close": b.close, "volume": b.volume}
+            for b in bars
+        ])
+        return {"symbol": sym, "timeframe": timeframe,
+                "surface": surface}
+    except HTTPException as exc:
+        raise exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #6: Correlation matrix endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/analytics/correlation-matrix",
+         tags=["analytics"],
+         summary="Rolling correlation matrix",
+         description="Return the rolling Pearson correlation matrix across "
+                     "the configured pairs (or those passed in ``?pairs=``). "
+                     "Includes per-window series and the latest snapshot "
+                     "(BACKEND-100 #6).",
+         responses={
+             200: {"description": "Correlation matrix dict"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_correlation_matrix(request: Request,
+                                 pairs: str | None = None,
+                                 window: int = 30,
+                                 timeframe: str = "D1",
+                                 count: int = 200,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Compute the rolling correlation matrix across the given pairs."""
+    pair_list = [p.strip().upper() for p in (pairs or ",".join(settings.pairs)).split(",")
+                 if p.strip()]
+    if not pair_list:
+        return {"pairs": [], "window": window, "matrix": {}, "latest": {}}
+    # Fetch closes per pair.
+    pairs_returns: dict[str, list[float]] = {}
+    if MT5_AVAILABLE and get_connector().connected:
+        import math as _math
+        for pair in pair_list:
+            mt5_sym = settings.symbol_for(pair)
+            try:
+                bars = _safe_call(get_connector().get_candles,
+                                  mt5_sym, timeframe, count)
+                closes = [float(b.close) for b in bars if b.close > 0]
+                returns = [_math.log(closes[i] / closes[i - 1])
+                           for i in range(1, len(closes))
+                           if closes[i - 1] > 0 and closes[i] > 0]
+                pairs_returns[pair] = returns
+            except Exception as exc:
+                logger.debug("correlation_matrix: skip %s: %s", pair, exc)
+    if not pairs_returns:
+        return {"pairs": pair_list, "window": window,
+                "matrix": {}, "latest": {}, "note": "mt5_unavailable"}
+    return correlation_matrix(pairs_returns, window=window)
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #7 + #8: news sentiment + economic surprise index
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/news/sentiment",
+         tags=["news"],
+         summary="News with AI sentiment tagging",
+         description="Return the economic calendar with each event annotated "
+                     "by Ollama sentiment (BULLISH / BEARISH / NEUTRAL + "
+                     "confidence).  Skips events silently if Ollama is "
+                     "unavailable (BACKEND-100 #7).",
+         responses={
+             200: {"description": "Events with sentiment"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("10/minute")
+async def api_news_sentiment(request: Request,
+                             days_ahead: int = 3,
+                             impact: str | None = "HIGH",
+                             _auth: dict = Depends(get_api_key)
+                             ) -> dict[str, Any]:
+    """Return the calendar with AI sentiment tags."""
+    cal = get_calendar()
+    try:
+        events = await cal.fetch_calendar(days_ahead=days_ahead, impact=impact)
+    except Exception as exc:
+        logger.warning("news_sentiment: fetch failed: %s", exc)
+        events = []
+    tagged = await cal.tag_sentiment(events=events)
+    return {
+        "count": len(tagged),
+        "events": tagged,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/economics/surprise-index",
+         tags=["news"],
+         summary="Economic surprise index",
+         description="Aggregate ``surprise = (actual - forecast) / sigma`` "
+                     "per currency over the last ``days`` days "
+                     "(BACKEND-100 #8).",
+         responses={
+             200: {"description": "Per-currency surprise stats"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_economics_surprise_index(request: Request,
+                                       days: int = 30,
+                                       sigma: float = 1.0,
+                                       _auth: dict = Depends(get_api_key)
+                                       ) -> dict[str, Any]:
+    """Return the aggregate surprise index per currency."""
+    cal = get_calendar()
+    return await cal.get_surprise_index(days=days, sigma=sigma)
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #12: swap tracking endpoints
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/swaps/report",
+         tags=["swaps"],
+         summary="Daily swap report",
+         description="Aggregate swap totals per day over an optional date "
+                     "range (BACKEND-100 #12).",
+         responses={
+             200: {"description": "Per-day swap summary"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_swaps_report(request: Request,
+                           start: str | None = None,
+                           end: str | None = None,
+                           _auth: dict = Depends(get_api_key)
+                           ) -> dict[str, Any]:
+    """Return the daily swap report."""
+    rows = swap_summary_by_day(start=start, end=end)
+    return {"count": len(rows), "by_day": rows}
+
+
+@app.get("/api/swaps/by-symbol",
+         tags=["swaps"],
+         summary="Swap per symbol",
+         description="Aggregate swap totals per symbol over an optional "
+                     "date range (BACKEND-100 #12).",
+         responses={
+             200: {"description": "Per-symbol swap summary"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_swaps_by_symbol(request: Request,
+                              start: str | None = None,
+                              end: str | None = None,
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Return the per-symbol swap report."""
+    rows = swap_summary_by_symbol(start=start, end=end)
+    return {"count": len(rows), "by_symbol": rows}
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #13: real-time drawdown endpoint
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/drawdown/realtime",
+         tags=["positions"],
+         summary="Real-time drawdown",
+         description="Return the current drawdown, peak equity, recovery "
+                     "target, and whether the 80% alert threshold is "
+                     "active (BACKEND-100 #13).",
+         responses={
+             200: {"description": "Drawdown snapshot"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("120/minute")
+async def api_drawdown_realtime(request: Request,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """Return the current real-time drawdown snapshot."""
+    engine = get_engine()
+    return engine.get_realtime_drawdown_snapshot()
 
 
 # --------------------------------------------------------------------------- #

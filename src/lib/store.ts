@@ -18,7 +18,10 @@ export type AppView =
   | 'audit'
   | 'settings'
   | 'stress-test'
-  | 'analytics';
+  | 'analytics'
+  | 'alerts'
+  | 'market'
+  | 'system';
 
 interface AppStore {
   // Display

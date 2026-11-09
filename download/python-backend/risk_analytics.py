@@ -220,7 +220,219 @@ def get_returns_from_trades(trades: Sequence[dict[str, Any]]
     return out
 
 
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #5: volatility surface
+# --------------------------------------------------------------------------- #
+
+def realized_volatility(returns: Sequence[float],
+                        window: int = 20,
+                        annualize: bool = True,
+                        periods_per_year: int = 252) -> float:
+    """Compute the realized volatility of a return series.
+
+    Parameters
+    ----------
+    returns : sequence of float
+        Period returns as fractions (e.g. 0.0012 = 0.12%).
+    window : int
+        Trailing window over which to compute the standard deviation.
+        The most recent ``window`` observations are used.
+    annualize : bool
+        If True, scale the per-period std-dev by ``sqrt(periods_per_year)``
+        to annualise.
+    periods_per_year : int
+        Annualisation factor (252 for daily, 252*6*24 for hourly, ...).
+
+    Returns
+    -------
+    float
+        Realized volatility as a fraction (e.g. 0.15 = 15%).  Returns 0.0
+        if the series is too short.
+    """
+    if not returns or len(returns) < 2 or window < 2:
+        return 0.0
+    r = list(returns[-window:]) if len(returns) >= window else list(returns)
+    if len(r) < 2:
+        return 0.0
+    mean = sum(r) / len(r)
+    var = sum((x - mean) ** 2 for x in r) / (len(r) - 1)
+    sd = math.sqrt(var)
+    if annualize:
+        sd *= math.sqrt(periods_per_year)
+    return sd
+
+
+def volatility_surface(candles: Sequence[dict[str, Any]],
+                       tenors: Sequence[int] = (1, 5, 10, 20, 60),
+                       price_key: str = "close"
+                       ) -> list[dict[str, Any]]:
+    """Build a volatility surface across multiple lookback tenors.
+
+    Parameters
+    ----------
+    candles : sequence of dict
+        OHLCV candles (or dicts with a ``close`` key), oldest first.
+        May also be :class:`indicators.Candle` instances.
+    tenors : sequence of int
+        Lookback windows in candles (e.g. 1, 5, 10, 20, 60).
+    price_key : str
+        Dict key for the close price (ignored if candles are Candle objects).
+
+    Returns
+    -------
+    list of dict
+        ``[{tenor_days, vol_pct, samples}]`` per tenor, in the order of
+        ``tenors``.  Tenors with insufficient data return ``vol_pct=0``.
+    """
+    closes: list[float] = []
+    for c in candles:
+        if hasattr(c, "close"):
+            closes.append(float(getattr(c, "close")))
+        elif isinstance(c, dict):
+            closes.append(float(c.get(price_key, 0.0)))
+        else:
+            try:
+                closes.append(float(c))
+            except Exception:
+                continue
+    if len(closes) < 2:
+        return [{"tenor_days": int(t), "vol_pct": 0.0, "samples": 0}
+                for t in tenors]
+    # Compute log returns: r_t = ln(P_t / P_{t-1}).
+    returns: list[float] = []
+    for i in range(1, len(closes)):
+        if closes[i - 1] > 0 and closes[i] > 0:
+            returns.append(math.log(closes[i] / closes[i - 1]))
+    out: list[dict[str, Any]] = []
+    for t in tenors:
+        # For each tenor, we treat "1 candle = 1 day" for annualisation.
+        # Caller may convert to the actual timeframe by re-computing
+        # periods_per_year if needed.
+        window = max(2, int(t))
+        rv = realized_volatility(returns, window=window,
+                                 annualize=True, periods_per_year=252)
+        out.append({
+            "tenor_days": int(t),
+            "vol_pct": round(rv * 100.0, 4),
+            "samples": min(window, len(returns)),
+        })
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-100 #6: dynamic correlation matrix (rolling Pearson)
+# --------------------------------------------------------------------------- #
+
+def _pearson(x: list[float], y: list[float]) -> float:
+    """Pearson correlation between two equal-length series."""
+    n = min(len(x), len(y))
+    if n < 2:
+        return 0.0
+    xs = x[-n:]
+    ys = y[-n:]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    num = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    dx = math.sqrt(sum((v - mx) ** 2 for v in xs))
+    dy = math.sqrt(sum((v - my) ** 2 for v in ys))
+    if dx == 0 or dy == 0:
+        return 0.0
+    return num / (dx * dy)
+
+
+def rolling_correlation(returns_a: Sequence[float],
+                        returns_b: Sequence[float],
+                        window: int = 30) -> list[float]:
+    """Compute the rolling Pearson correlation between two return series.
+
+    Parameters
+    ----------
+    returns_a, returns_b : sequence of float
+        Equal-length return series (oldest first).
+    window : int
+        Rolling window size.
+
+    Returns
+    -------
+    list[float]
+        One correlation per window position; the first ``window-1`` entries
+        are 0.0 (insufficient data).  Length = ``len(returns_a)``.
+    """
+    a = list(returns_a)
+    b = list(returns_b)
+    n = min(len(a), len(b))
+    if n < window or window < 2:
+        return [0.0] * max(n, 0)
+    out: list[float] = [0.0] * n
+    for i in range(window - 1, n):
+        window_a = a[i - window + 1: i + 1]
+        window_b = b[i - window + 1: i + 1]
+        out[i] = round(_pearson(window_a, window_b), 4)
+    return out
+
+
+def correlation_matrix(pairs_returns: dict[str, Sequence[float]],
+                       window: int = 30) -> dict[str, Any]:
+    """Build a rolling correlation matrix across multiple return series.
+
+    Parameters
+    ----------
+    pairs_returns : dict[str, sequence of float]
+        Mapping of pair name -> return series.  All series should be the
+        same length (the function truncates to the shortest).
+    window : int
+        Rolling window for the correlation.
+
+    Returns
+    -------
+    dict
+        ``{"pairs": [...], "window": window, "matrix": {pair_a:
+        {pair_b: corr}}, "latest": {pair_a: {pair_b: corr}}}``
+        where ``latest`` is the correlation over the most recent
+        ``window`` observations.
+    """
+    pairs = list(pairs_returns.keys())
+    if not pairs:
+        return {"pairs": [], "window": window, "matrix": {}, "latest": {}}
+    # Truncate to equal length.
+    min_len = min(len(pairs_returns[p]) for p in pairs)
+    series = {p: list(pairs_returns[p])[-min_len:] for p in pairs}
+    # Build full per-window matrix.
+    matrix: dict[str, dict[str, list[float]]] = {
+        p1: {p2: [] for p2 in pairs} for p1 in pairs
+    }
+    for p1 in pairs:
+        for p2 in pairs:
+            if p1 == p2:
+                matrix[p1][p2] = [1.0] * max(0, min_len - window + 1)
+            else:
+                matrix[p1][p2] = rolling_correlation(
+                    series[p1], series[p2], window=window)
+    # Latest = last entry of each rolling series.
+    latest: dict[str, dict[str, float]] = {
+        p1: {} for p1 in pairs
+    }
+    for p1 in pairs:
+        for p2 in pairs:
+            row = matrix[p1][p2]
+            latest[p1][p2] = row[-1] if row else 0.0
+    # Trim matrix to the last 20 windows to keep payload small.
+    trimmed: dict[str, dict[str, list[float]]] = {
+        p1: {p2: matrix[p1][p2][-20:] for p2 in pairs} for p1 in pairs
+    }
+    return {
+        "pairs": pairs,
+        "window": window,
+        "samples": min_len,
+        "matrix": trimmed,
+        "latest": latest,
+    }
+
+
 __all__ = [
     "calculate_var", "calculate_cvar", "calculate_portfolio_var",
     "get_returns_from_trades",
+    # BACKEND-100 Sprint 9
+    "realized_volatility", "volatility_surface",
+    "rolling_correlation", "correlation_matrix",
 ]

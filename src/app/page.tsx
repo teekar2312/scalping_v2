@@ -16,6 +16,11 @@ import { BacktestView } from '@/components/app/views/backtest-view';
 import { AuditLogView } from '@/components/app/views/audit-log-view';
 import { StressTestView } from '@/components/app/views/stress-test-view';
 import { AnalyticsView } from '@/components/app/views/analytics-view';
+import { AlertsView } from '@/components/app/views/alerts-view';
+import { MarketAnalysisView } from '@/components/app/views/market-analysis-view';
+import { SystemHealthView } from '@/components/app/views/system-health-view';
+import { CommandPalette } from '@/components/app/command-palette';
+import { ShortcutsHelp } from '@/components/app/shortcuts-help';
 import { LoginView } from '@/components/app/login-view';
 import { useAppStore } from '@/lib/store';
 import { initAuthBridge, useMounted, useAuth } from '@/lib/auth';
@@ -71,10 +76,16 @@ export default function Home() {
               {activeView === 'ai' && <AiChatView />}
               {activeView === 'news' && <NewsView />}
               {activeView === 'strategy' && <StrategyView />}
+              {activeView === 'alerts' && <AlertsView />}
+              {activeView === 'market' && <MarketAnalysisView />}
+              {activeView === 'system' && <SystemHealthView />}
               {activeView === 'settings' && <SettingsView />}
             </main>
           </div>
         </div>
+        {/* Global overlays — palette + shortcuts help mount once at root. */}
+        <CommandPalette />
+        <ShortcutsHelp />
       </WebSocketProvider>
     </AuthGate>
   );

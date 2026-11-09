@@ -59,6 +59,28 @@ import type {
   HealthzResponse,
   EncryptionStatus,
   VaRMethod,
+  PriceAlert,
+  PriceAlertCreateRequest,
+  PriceAlertListResponse,
+  PriceAlertTestResponse,
+  SystemInfoResponse,
+  ServiceStatusResponse,
+  DrawdownRealtimeResponse,
+  CurrencyStrengthResponse,
+  VolumeProfileResponse,
+  CorrelationMatrixResponse,
+  VolatilitySurfaceResponse,
+  OrderFlowResponse,
+  NewsSentimentResponse,
+  SurpriseIndexResponse,
+  EnhancedHealthzResponse,
+  BrokerStatusResponse,
+  FailoverResponse,
+  SwapsReportResponse,
+  SwapsReportEntry,
+  TickBacktestRequest,
+  TickBacktestResult,
+  BackupOffsiteResponse,
 } from './types';
 import {
   getDemoAccount,
@@ -101,6 +123,22 @@ import {
   getDemoAuditChainVerify,
   getDemoBappebtiStatus,
   getDemoEncryptionStatus,
+  getDemoPriceAlerts,
+  getDemoCreatePriceAlert,
+  getDemoSystemInfo,
+  getDemoServiceStatus,
+  getDemoDrawdownRealtime,
+  getDemoMetrics,
+  getDemoCurrencyStrength,
+  getDemoVolumeProfile,
+  getDemoCorrelationMatrix,
+  getDemoVolatilitySurface,
+  getDemoOrderFlow,
+  getDemoNewsSentiment,
+  getDemoSurpriseIndex,
+  getDemoBrokerStatus,
+  getDemoSwapsReport,
+  getDemoTickBacktest,
 } from './mock-data';
 
 // In demo mode (sandbox), use Next.js API routes that return mock data
@@ -1150,4 +1188,207 @@ export async function changePassword(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
   });
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100: Price alerts (Feature 5)
+// --------------------------------------------------------------------------- //
+
+export async function listPriceAlerts(): Promise<PriceAlertListResponse> {
+  if (IS_DEMO) {
+    return { alerts: getDemoPriceAlerts(), total: getDemoPriceAlerts().length };
+  }
+  return fetchAPI<PriceAlertListResponse>('/api/alerts');
+}
+
+export async function createPriceAlert(body: PriceAlertCreateRequest): Promise<PriceAlert> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 300));
+    return getDemoCreatePriceAlert(body);
+  }
+  return fetchAPI<PriceAlert>('/api/alerts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deletePriceAlert(id: string): Promise<{ ok: boolean }> {
+  if (IS_DEMO) return { ok: true };
+  return fetchAPI<{ ok: boolean }>(`/api/alerts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function testPriceAlert(id: string): Promise<PriceAlertTestResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 250));
+    return {
+      ok: true,
+      message: 'Alert test fired (demo) — browser notification + audit log entry',
+      fired_at: new Date().toISOString(),
+    };
+  }
+  return fetchAPI<PriceAlertTestResponse>(`/api/alerts/${encodeURIComponent(id)}/test`, {
+    method: 'POST',
+  });
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100: System health (Feature 6)
+// --------------------------------------------------------------------------- //
+
+export async function getSystemInfo(): Promise<SystemInfoResponse> {
+  if (IS_DEMO) return getDemoSystemInfo();
+  return fetchAPI<SystemInfoResponse>('/api/system/info');
+}
+
+export async function getServiceStatus(): Promise<ServiceStatusResponse> {
+  if (IS_DEMO) return getDemoServiceStatus();
+  return fetchAPI<ServiceStatusResponse>('/api/services/status');
+}
+
+export async function getDrawdownRealtime(): Promise<DrawdownRealtimeResponse> {
+  if (IS_DEMO) return getDemoDrawdownRealtime();
+  return fetchAPI<DrawdownRealtimeResponse>('/api/drawdown/realtime');
+}
+
+export async function getEnhancedHealthz(): Promise<EnhancedHealthzResponse> {
+  if (IS_DEMO) {
+    return {
+      status: 'healthy',
+      uptime_seconds: 142_873,
+      version: '2.0.0',
+      build_id: 'frontend-100',
+      commit_sha: 'feat/pwa-push-shortcuts-alerts',
+      checked_at: new Date().toISOString(),
+    };
+  }
+  return fetchAPI<EnhancedHealthzResponse>('/api/healthz');
+}
+
+export async function getMetrics(): Promise<string> {
+  // Prometheus exposition format — plain text, not JSON.
+  if (IS_DEMO) {
+    return getDemoMetrics();
+  }
+  if (!PYTHON_API) {
+    const res = await fetch('/metrics');
+    return res.text();
+  }
+  const res = await fetch(`${PYTHON_API}/metrics`);
+  return res.text();
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100: Market analysis (Feature 7)
+// --------------------------------------------------------------------------- //
+
+export async function getCurrencyStrength(): Promise<CurrencyStrengthResponse> {
+  if (IS_DEMO) return getDemoCurrencyStrength();
+  return fetchAPI<CurrencyStrengthResponse>('/api/market/currency-strength');
+}
+
+export async function getVolumeProfile(symbol: string): Promise<VolumeProfileResponse> {
+  if (IS_DEMO) return getDemoVolumeProfile(symbol);
+  return fetchAPI<VolumeProfileResponse>(`/api/volume-profile/${encodeURIComponent(symbol)}`);
+}
+
+export async function getCorrelationMatrix(
+  pairs: string[],
+  window: number,
+): Promise<CorrelationMatrixResponse> {
+  if (IS_DEMO) return getDemoCorrelationMatrix(pairs, window);
+  const params = new URLSearchParams();
+  params.set('pairs', pairs.join(','));
+  params.set('window', String(window));
+  return fetchAPI<CorrelationMatrixResponse>(`/api/analytics/correlation-matrix?${params.toString()}`);
+}
+
+export async function getVolatilitySurface(symbol: string): Promise<VolatilitySurfaceResponse> {
+  if (IS_DEMO) return getDemoVolatilitySurface(symbol);
+  return fetchAPI<VolatilitySurfaceResponse>(
+    `/api/analytics/volatility-surface/${encodeURIComponent(symbol)}`
+  );
+}
+
+export async function getOrderFlow(symbol: string): Promise<OrderFlowResponse> {
+  if (IS_DEMO) return getDemoOrderFlow(symbol);
+  return fetchAPI<OrderFlowResponse>(`/api/order-flow/${encodeURIComponent(symbol)}`);
+}
+
+export async function getNewsSentiment(): Promise<NewsSentimentResponse> {
+  if (IS_DEMO) return getDemoNewsSentiment();
+  return fetchAPI<NewsSentimentResponse>('/api/news/sentiment');
+}
+
+export async function getEconomicSurpriseIndex(days: number): Promise<SurpriseIndexResponse> {
+  if (IS_DEMO) return getDemoSurpriseIndex(days);
+  return fetchAPI<SurpriseIndexResponse>(
+    `/api/economics/surprise-index?days=${days}`
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Frontend-100: Broker status / failover / swaps / tick backtest / backup
+// (consumed by System Health view + future use)
+// --------------------------------------------------------------------------- //
+
+export async function getBrokerStatus(): Promise<BrokerStatusResponse> {
+  if (IS_DEMO) return getDemoBrokerStatus();
+  return fetchAPI<BrokerStatusResponse>('/api/broker/status');
+}
+
+export async function triggerBrokerFailover(reason: string): Promise<FailoverResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return {
+      ok: true,
+      switched_to: 'mt5',
+      reason,
+      switched_at: new Date().toISOString(),
+    };
+  }
+  return fetchAPI<FailoverResponse>('/api/broker/failover', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function getSwapsReport(): Promise<SwapsReportResponse> {
+  if (IS_DEMO) return getDemoSwapsReport();
+  return fetchAPI<SwapsReportResponse>('/api/swaps/report');
+}
+
+export async function getSwapsBySymbol(symbol: string): Promise<SwapsReportEntry> {
+  if (IS_DEMO) {
+    const all = getDemoSwapsReport();
+    return all.entries.find((e) => e.symbol === symbol) ?? all.entries[0];
+  }
+  return fetchAPI<SwapsReportEntry>(`/api/swaps/by-symbol?symbol=${encodeURIComponent(symbol)}`);
+}
+
+export async function runTickBacktest(body: TickBacktestRequest): Promise<TickBacktestResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 600));
+    return getDemoTickBacktest(body);
+  }
+  return fetchAPI<TickBacktestResult>('/api/backtest/tick', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function triggerOffsiteBackup(): Promise<BackupOffsiteResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 500));
+    return {
+      ok: true,
+      destination: 's3://scalping-v2-backups/demo.sqlite',
+      size_bytes: 1_245_184,
+      uploaded_at: new Date().toISOString(),
+      message: 'Offsite backup uploaded (demo)',
+    };
+  }
+  return fetchAPI<BackupOffsiteResponse>('/api/backup/offsite', { method: 'POST' });
 }

@@ -146,6 +146,42 @@ class AIAnalysis:
 
 
 # --------------------------------------------------------------------------- #
+# BACKEND-100 #7: news sentiment dataclass + system prompt
+# --------------------------------------------------------------------------- #
+
+NEWS_SENTIMENT_SYSTEM_PROMPT = """\
+You are a forex news sentiment classifier.  Given a news headline and
+optional body text, classify the sentiment for the affected currency as
+BULLISH, BEARISH or NEUTRAL.
+
+Return a single JSON object only (no prose):
+{
+  "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL",
+  "confidence": 0.0 - 1.0,
+  "affected_currencies": ["USD", "EUR", ...]
+}
+
+Rules:
+- BULLISH: news likely to strengthen the currency (rate hike, strong data,
+  hawkish central bank, etc.).
+- BEARISH: news likely to weaken the currency (rate cut, weak data, dovish
+  central bank, political instability, etc.).
+- NEUTRAL: news is mixed, expected, or low impact.
+- Only list currencies directly mentioned or implied in the headline/body.
+- Keep confidence <= 0.5 for NEUTRAL or ambiguous news.
+"""
+
+
+@dataclass
+class NewsSentiment:
+    """Result of :meth:`OllamaClient.analyze_news_sentiment`."""
+    sentiment: str             # BULLISH | BEARISH | NEUTRAL
+    confidence: float
+    affected_currencies: list[str]
+    raw: str
+
+
+# --------------------------------------------------------------------------- #
 # Client
 # --------------------------------------------------------------------------- #
 
@@ -359,6 +395,95 @@ class OllamaClient:
         return await self.chat([{"role": "user", "content": user_msg}],
                                stream=False)
 
+    # ---- BACKEND-100 #7: news sentiment ----------------------------------- #
+
+    async def analyze_news_sentiment(self, title: str,
+                                     body: str = "",
+                                     currency: str | None = None
+                                     ) -> NewsSentiment:
+        """Classify a forex news headline + body for sentiment.
+
+        Parameters
+        ----------
+        title : str
+            News headline text.
+        body : str
+            Optional body / summary text.  Default empty.
+        currency : str | None
+            Optional ISO currency code (e.g. "USD") that should be the focus
+            of the sentiment.  When provided, included in the prompt so the
+            model returns sentiment *for that currency*.
+
+        Returns
+        -------
+        NewsSentiment
+            Parsed sentiment.  On any error returns NEUTRAL with confidence 0.
+        """
+        focus = f" for {currency.upper()}" if currency else ""
+        user_msg = (
+            f"Classify the following forex news sentiment{focus} and return "
+            f"JSON only.\n\nHeadline: {title}\nBody: {body or '(none)'}"
+        )
+        messages = [{"role": "system",
+                     "content": NEWS_SENTIMENT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg}]
+        try:
+            raw = await self.chat(messages, stream=False)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("analyze_news_sentiment chat failed: %s", exc)
+            return NewsSentiment(
+                sentiment="NEUTRAL", confidence=0.0,
+                affected_currencies=[], raw="",
+            )
+        return self._parse_news_sentiment(raw, currency)
+
+    @staticmethod
+    def _parse_news_sentiment(raw: str,
+                              currency: str | None = None) -> NewsSentiment:
+        """Best-effort parse of the model's sentiment JSON response."""
+        text = raw.strip()
+        # Strip markdown code fences if present.
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [ln for ln in lines if not ln.startswith("```")]
+            text = "\n".join(lines)
+        obj: Any = None
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    obj = json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    obj = None
+        if not isinstance(obj, dict):
+            # Fall back: scan for keywords in the raw text.
+            t_low = text.lower()
+            if "bullish" in t_low:
+                return NewsSentiment("BULLISH", 0.3,
+                                     [currency] if currency else [], raw)
+            if "bearish" in t_low:
+                return NewsSentiment("BEARISH", 0.3,
+                                     [currency] if currency else [], raw)
+            return NewsSentiment("NEUTRAL", 0.0,
+                                 [currency] if currency else [], raw)
+        sent = str(obj.get("sentiment", "NEUTRAL")).upper()
+        if sent not in ("BULLISH", "BEARISH", "NEUTRAL"):
+            sent = "NEUTRAL"
+        conf = float(obj.get("confidence", 0.0) or 0.0)
+        affected = list(obj.get("affected_currencies", []) or [])
+        if not isinstance(affected, list):
+            affected = []
+        affected = [str(c).upper() for c in affected if c]
+        if currency and currency.upper() not in affected:
+            affected.insert(0, currency.upper())
+        return NewsSentiment(
+            sentiment=sent, confidence=conf,
+            affected_currencies=affected, raw=raw,
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Singleton
@@ -385,5 +510,6 @@ async def close_default_client() -> None:
 __all__ = [
     "OllamaClient", "AIAnalysis",
     "V2_STRATEGY_SYSTEM_PROMPT",
+    "NewsSentiment", "NEWS_SENTIMENT_SYSTEM_PROMPT",
     "get_analyzer", "close_default_client",
 ]

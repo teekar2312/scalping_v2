@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -254,6 +255,173 @@ class TiingoCalendar:
                             impact: str | None = "HIGH") -> list[dict[str, Any]]:
         """Synchronous wrapper around :meth:`fetch_calendar`."""
         return asyncio.run(self.fetch_calendar(days_ahead, impact))
+
+    # ---- BACKEND-100 #7: news sentiment auto-tagging --------------------- #
+
+    async def tag_sentiment(self,
+                            events: list[dict[str, Any]] | None = None,
+                            days_ahead: int = 7,
+                            impact: str | None = "HIGH"
+                            ) -> list[dict[str, Any]]:
+        """Annotate each event with AI sentiment via Ollama.
+
+        Adds ``sentiment``, ``sentiment_confidence`` and
+        ``affected_currencies`` keys to each event dict.  Failures degrade
+        gracefully (the original event is returned unchanged).
+
+        Parameters
+        ----------
+        events : list of dict, optional
+            Pre-fetched events.  If ``None``, :meth:`fetch_calendar` is
+            called.
+        days_ahead : int
+            Forwarded to ``fetch_calendar`` when ``events`` is None.
+        impact : str | None
+            Forwarded to ``fetch_calendar`` when ``events`` is None.
+        """
+        if events is None:
+            events = await self.fetch_calendar(days_ahead=days_ahead,
+                                               impact=impact)
+        if not events:
+            return []
+        try:
+            from ollama_analyzer import get_analyzer
+            analyzer = get_analyzer()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("tag_sentiment: analyzer unavailable: %s", exc)
+            return events
+        # Skip the AI call entirely if Ollama is down - the latency would
+        # make the endpoint unusable.
+        try:
+            if not await analyzer.is_available():
+                logger.info("tag_sentiment: Ollama unavailable - skipping")
+                return events
+        except Exception:  # pragma: no cover
+            return events
+        out: list[dict[str, Any]] = []
+        for ev in events:
+            title = str(ev.get("title") or "")
+            currency = (ev.get("symbol") or ev.get("country") or "").upper() or None
+            try:
+                ns = await analyzer.analyze_news_sentiment(
+                    title=title, body="", currency=currency)
+                ev = dict(ev)
+                ev["sentiment"] = ns.sentiment
+                ev["sentiment_confidence"] = ns.confidence
+                ev["affected_currencies"] = ns.affected_currencies
+            except Exception as exc:  # pragma: no cover
+                logger.debug("tag_sentiment: failed for '%s': %s",
+                             title[:40], exc)
+            out.append(ev)
+        return out
+
+    # ---- BACKEND-100 #8: economic surprise index ------------------------- #
+
+    @staticmethod
+    def calculate_surprise(actual: Any, forecast: Any,
+                           sigma: float = 1.0) -> float | None:
+        """Compute the standardised surprise ``(actual - forecast) / sigma``.
+
+        Accepts string or numeric inputs; parses trailing ``%``, ``K``,
+        ``M``, ``B`` suffixes (common Tiingo formats).  Returns ``None``
+        if either input is missing or sigma <= 0.
+        """
+        def _parse(v: Any) -> float | None:
+            if v is None:
+                return None
+            s = str(v).strip().replace(",", "")
+            if not s or s.lower() in ("n/a", "none", "-"):
+                return None
+            mult = 1.0
+            if s.endswith("%"):
+                s = s[:-1]
+            if s and s[-1].upper() in ("K", "M", "B"):
+                suffix = s[-1].upper()
+                s = s[:-1]
+                mult = {"K": 1_000.0, "M": 1_000_000.0,
+                        "B": 1_000_000_000.0}[suffix]
+            try:
+                return float(s) * mult
+            except (TypeError, ValueError):
+                return None
+        a = _parse(actual)
+        f = _parse(forecast)
+        if a is None or f is None or sigma is None or float(sigma) <= 0:
+            return None
+        try:
+            return (a - f) / float(sigma)
+        except Exception:
+            return None
+
+    async def get_surprise_index(self,
+                                 days: int = 30,
+                                 sigma: float = 1.0
+                                 ) -> dict[str, Any]:
+        """Aggregate surprise per currency over the last ``days`` days.
+
+        Returns a dict keyed by currency ISO code with the mean surprise,
+        sample count, and last-event timestamp.  Events lacking an actual
+        or forecast value are skipped.
+
+        Parameters
+        ----------
+        days : int
+            Lookback window (in days).
+        sigma : float
+            Standardisation divisor for the surprise calculation.  Default 1.0
+            (raw surprise) - callers may pass a per-event historical sigma.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        try:
+            events = await self.fetch_calendar(impact=None)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("get_surprise_index: fetch_calendar failed: %s", exc)
+            events = []
+        per_ccy: dict[str, list[float]] = {}
+        last_ts: dict[str, str] = {}
+        for ev in events:
+            et = ev.get("event_time")
+            if isinstance(et, str):
+                try:
+                    et_dt = datetime.fromisoformat(et.replace("Z", "+00:00"))
+                except ValueError:
+                    et_dt = None
+            elif isinstance(et, datetime):
+                et_dt = et
+            else:
+                et_dt = None
+            if et_dt is None or et_dt.tzinfo is None:
+                continue
+            if et_dt < cutoff:
+                continue
+            surprise = self.calculate_surprise(
+                ev.get("actual"), ev.get("forecast"), sigma=sigma)
+            if surprise is None:
+                continue
+            ccy = (ev.get("symbol") or ev.get("country") or "").upper()
+            if not ccy:
+                continue
+            per_ccy.setdefault(ccy, []).append(float(surprise))
+            last_ts[ccy] = et_dt.isoformat()
+        out: dict[str, Any] = {}
+        for ccy, vals in per_ccy.items():
+            n = len(vals)
+            mean = sum(vals) / n if n else 0.0
+            # Sample std-dev (uncorrected) for the dispersion gauge.
+            var = sum((v - mean) ** 2 for v in vals) / n if n else 0.0
+            std = math.sqrt(var)
+            out[ccy] = {
+                "samples": n,
+                "mean_surprise": round(mean, 4),
+                "std_surprise": round(std, 4),
+                "last_event": last_ts.get(ccy),
+            }
+        return {
+            "days": days,
+            "sigma": sigma,
+            "currencies": out,
+            "events_processed": len(events),
+        }
 
 
 # --------------------------------------------------------------------------- #

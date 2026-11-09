@@ -232,6 +232,132 @@ scalping_v2/
 - Backtest 300 trade + forward demo 3 bulan WAJIB sebelum akun mikro live
 - Pastikan compliance dengan regulasi BAPPEBTI Indonesia untuk trading forex
 
+## Production Deployment
+
+### Option A — Windows Service via NSSM (recommended for MT5 desktop)
+
+```powershell
+# 1. Install NSSM (https://nssm.cc/)
+choco install nssm
+
+# 2. Install Python backend as a service
+nssm install ScalpingV2Backend "C:\scalping_v2\download\python-backend\venv\Scripts\python.exe" "C:\scalping_v2\download\python-backend\main.py"
+nssm set ScalpingV2Backend AppDirectory "C:\scalping_v2\download\python-backend"
+nssm set ScalpingV2Backend AppEnvironmentExtra "PYTHONUNBUFFERED=1"
+nssm set ScalpingV2Backend Start SERVICE_AUTO_START
+nssm start ScalpingV2Backend
+
+# 3. Install Next.js frontend as a service
+nssm install ScalpingV2Frontend "C:\Program Files\nodejs\node.exe" "C:\scalping_v2\.next\standalone\server.js"
+nssm set ScalpingV2Frontend AppDirectory "C:\scalping_v2"
+nssm set ScalpingV2Frontend AppEnvironmentExtra "NODE_ENV=production" "PORT=3000"
+nssm set ScalpingV2Frontend Start SERVICE_AUTO_START
+nssm start ScalpingV2Frontend
+
+# 4. Verify
+sc query ScalpingV2Backend
+sc query ScalpingV2Frontend
+```
+
+### Option B — Linux VPS via systemd (for cloud / Docker-based MT5 bridge)
+
+```bash
+# 1. Copy systemd unit (already provided in download/python-backend/deploy/systemd/)
+sudo cp download/python-backend/deploy/systemd/scalping-v2.service /etc/systemd/system/
+
+# 2. Edit paths inside the unit file
+sudo nano /etc/systemd/system/scalping-v2.service
+
+# 3. Enable + start
+sudo systemctl daemon-reload
+sudo systemctl enable scalping-v2
+sudo systemctl start scalping-v2
+sudo systemctl status scalping-v2
+sudo journalctl -u scalping-v2 -f
+```
+
+### Option C — Docker Compose (full stack)
+
+```bash
+docker compose up -d
+# Frontend: http://localhost:3000
+# Backend:  http://localhost:8000
+# Prometheus: http://localhost:9090 (optional)
+# Grafana: http://localhost:3001 (optional)
+```
+
+### VPS Hardening Checklist
+
+- [ ] SSH key auth only — disable password login (`PasswordAuthentication no`)
+- [ ] Firewall: `ufw allow 22,80,443 && ufw enable`
+- [ ] fail2ban: `apt install fail2ban && systemctl enable fail2ban`
+- [ ] Automatic security updates: `apt install unattended-upgrades`
+- [ ] Disable root SSH: `PermitRootLogin no`
+- [ ] MT5 bridge runs in separate user account (no sudo)
+- [ ] Database backups encrypted with GPG before offsite upload
+- [ ] TLS terminated by Caddy/Nginx — see `Caddyfile`
+
+## Operational Runbook
+
+### Daily Checklist (5 min)
+
+1. **Health check** — buka dashboard, verify `HealthPill` ALL HEALTHY (header kanan atas).
+2. **Backup verify** — Settings → Database Backup → Download .sqlite; verify file size &gt; 100 KB.
+3. **Trade review** — Trade Journal → filter hari ini; review R-net, RR compliance, emosi.
+4. **Audit log scan** — Audit Log tab → filter severity ERROR / CRITICAL; investigate anomalies.
+5. **Bot uptime** — Dashboard → System Status → uptime &gt; 24h expected.
+6. **Margin level** — Dashboard → Account → margin level &gt; 500%; below 200% triggers warning.
+
+### Weekly Checklist (15 min)
+
+1. **Performance review** — Analytics → Performance Attribution by session / setup / regime.
+2. **Slippage & latency** — Analytics → Slippage &amp; Latency tabs; p95 &lt; threshold.
+3. **Risk metrics** — Dashboard → VaR / CVaR; alert bila melebihi hard stop tier.
+4. **Update settings** — bila win rate drift &gt; 5% dari backtest, recalibrate risk per trade.
+5. **Backup rotation** — Download weekly backup; upload manual ke S3 / offsite storage.
+6. **Risk disclosure** — Settings → Regulatory; verify &gt; 7 days remaining before reack.
+
+### Monthly Checklist (30 min)
+
+1. **Renew risk disclosure** — acknowledge setiap 30 hari (Settings → Regulatory).
+2. **Tax export** — Settings → Tax Export (SPT) untuk bulan berjalan; simpan CSV.
+3. **Equity curve review** — Journal → Export PDF; review monthly summary.
+4. **Stress test rerun** — Stress Test → replay 4 scenarios; verify survival PASS.
+5. **Monte Carlo rerun** — Backtest → Monte Carlo 500 iter; verify survival rate &gt; 95%.
+6. **Walk-forward rerun** — Backtest → Walk-Forward; verify degradation &lt; 20%.
+7. **Audit chain verify** — Audit Log → Verify Chain; verify hash-chain integrity.
+
+## Environment Variables Reference
+
+### Frontend (Next.js)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | yes | — | Prisma SQLite path (`file:/path/to/custom.db`) |
+| `NEXT_PUBLIC_PYTHON_API_URL` | no | empty | Python backend URL. Empty → DEMO mode with mock data. |
+| `NEXT_PUBLIC_PYTHON_WS_URL` | no | derived | WebSocket URL. Default: `ws://<python host>/ws`. |
+
+### Backend (Python FastAPI) — see `download/python-backend/.env.example`
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MT5_LOGIN` | yes | MT5 account login (integer) |
+| `MT5_PASSWORD` | yes | MT5 account password |
+| `MT5_SERVER` | yes | MT5 broker server (e.g. `FinexIC-Markets`) |
+| `OLLAMA_URL` | no | Default `http://localhost:11434` |
+| `OLLAMA_MODEL` | no | Default `llama3.2:latest` |
+| `TIINGO_API_KEY` | yes | Tiingo calendar API key |
+| `TELEGRAM_BOT_TOKEN` | no | Telegram bot token for notifications |
+| `TELEGRAM_CHAT_ID` | no | Telegram chat ID for notifications |
+| `DATABASE_URL` | yes | SQLite path |
+| `SECRET_KEY` | yes | JWT signing secret (32+ random bytes) |
+| `ENCRYPTION_KEY` | no | SQLCipher passphrase (enables at-rest encryption) |
+| `VAPID_PUBLIC_KEY` | no | Web Push VAPID public key |
+| `VAPID_PRIVATE_KEY` | no | Web Push VAPID private key |
+| `CORS_ORIGINS` | no | Comma-separated allowed origins |
+| `LOG_LEVEL` | no | `INFO` / `DEBUG` / `WARNING` |
+| `PROMETHEUS_PORT` | no | `/metrics` scrape port (default: same as app) |
+
 ## License
 
 Personal use. Strategy V2 © 2026 Z.ai · Edisi Scalping.
