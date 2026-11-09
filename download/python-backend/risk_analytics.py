@@ -18,7 +18,6 @@ VaR conventions
   given confidence level (e.g. VaR_95 = 0.025 means "with 95% confidence
   the worst daily loss will not exceed 2.5% of capital").
 """
-from __future__ import annotations
 
 import logging
 import math

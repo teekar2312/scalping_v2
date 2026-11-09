@@ -23,7 +23,6 @@ All thresholds are imported from :mod:`config` to guarantee a single source
 of truth.
 """
 
-from __future__ import annotations
 
 import logging
 import math

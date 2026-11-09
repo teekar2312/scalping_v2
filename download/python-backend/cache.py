@@ -13,7 +13,6 @@ Thread-safety: the cache uses a single ``threading.Lock`` - good enough for
 the read-heavy pattern of the trading loop.
 """
 
-from __future__ import annotations
 
 import logging
 import threading

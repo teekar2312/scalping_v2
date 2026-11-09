@@ -21,7 +21,6 @@ functions and indicators directly so it can run on any host (no MT5 needed)
 given a CSV of OHLC bars.
 """
 
-from __future__ import annotations
 
 import csv
 import json

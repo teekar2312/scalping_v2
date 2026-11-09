@@ -17,7 +17,6 @@ Key responsibilities:
     * Close ALL positions (kill switch)
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

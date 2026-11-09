@@ -12,7 +12,6 @@ Endpoints used (Ollama native API):
     * POST /api/generate  - one-shot generation
 """
 
-from __future__ import annotations
 
 import json
 import logging

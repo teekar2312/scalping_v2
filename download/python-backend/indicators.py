@@ -19,7 +19,6 @@ All functions accept either plain Python lists of floats or pandas Series.
 They return floats (latest value) or lists (full series) where indicated.
 """
 
-from __future__ import annotations
 
 import math
 from dataclasses import dataclass

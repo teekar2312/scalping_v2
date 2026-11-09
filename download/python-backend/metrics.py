@@ -23,7 +23,6 @@ Exposes:
 Use ``prometheus_client.generate_latest(registry)`` to render the ``/metrics``
 endpoint body.
 """
-from __future__ import annotations
 
 import time
 import uuid

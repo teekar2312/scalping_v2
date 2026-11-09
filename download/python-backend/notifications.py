@@ -23,7 +23,6 @@ Usage:
     await mgr.send_kill_switch(reason="manual")
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

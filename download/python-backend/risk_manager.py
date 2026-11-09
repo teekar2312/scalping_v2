@@ -16,7 +16,6 @@ All thresholds come from :mod:`config` so they remain consistent with the
 strategy PDF.
 """
 
-from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field

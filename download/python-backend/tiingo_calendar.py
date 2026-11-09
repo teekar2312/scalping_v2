@@ -13,7 +13,6 @@ If ``TIINGO_API_KEY`` is missing the client degrades gracefully and returns
 an empty list (the strategy treats this as "no known blackout events").
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

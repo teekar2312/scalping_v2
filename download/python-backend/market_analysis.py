@@ -29,7 +29,6 @@ function:
 The implementation uses only :mod:`numpy` if available, with a pure-Python
 fallback so the module is importable even without numpy installed.
 """
-from __future__ import annotations
 
 import logging
 import math

@@ -19,7 +19,6 @@ Run::
 The script never writes anywhere except stdout so you can paste the output
 into your ``.env`` file.
 """
-from __future__ import annotations
 
 import argparse
 import secrets

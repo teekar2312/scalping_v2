@@ -20,7 +20,6 @@ Deployment artifacts (installed alongside this module):
     deploy/windows/install-service.bat      - NSSM install script
     deploy/windows/uninstall-service.bat    - NSSM uninstall script
 """
-from __future__ import annotations
 
 import logging
 import os

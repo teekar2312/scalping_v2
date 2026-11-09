@@ -29,7 +29,6 @@ To stay compatible with libraries that do ``from secrets import token_hex``,
 the stdlib helpers are loaded directly from the stdlib path and re-exported
 at the top of this file.
 """
-from __future__ import annotations
 
 # --------------------------------------------------------------------------- #
 # Bootstrap: load the *real* stdlib secrets module and re-export its helpers,

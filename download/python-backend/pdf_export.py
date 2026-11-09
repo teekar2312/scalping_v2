@@ -19,7 +19,6 @@ Usage:
     path = JournalPDFExporter().export_week("2026-03-02")
 """
 
-from __future__ import annotations
 
 import io
 import logging

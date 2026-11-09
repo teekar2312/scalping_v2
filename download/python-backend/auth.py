@@ -20,7 +20,6 @@ Features
 This module is intentionally side-effect free at import time; the singleton
 ``APIKeyAuth`` instance is created lazily by :func:`get_auth`.
 """
-from __future__ import annotations
 
 import logging
 import secrets as _secrets

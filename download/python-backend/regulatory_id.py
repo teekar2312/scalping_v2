@@ -22,7 +22,6 @@ Indonesian regulatory context
 
 The numbers below should be verified by a tax professional before filing.
 """
-from __future__ import annotations
 
 import csv
 import io

@@ -18,7 +18,6 @@ Each scenario multiplies the magnitude of the worst N trades by a stress
 factor (typically 2x-3.5x) and re-computes the resulting max drawdown and
 whether the account would still have positive equity.
 """
-from __future__ import annotations
 
 import logging
 import math

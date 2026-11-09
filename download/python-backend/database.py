@@ -20,7 +20,6 @@ The module exposes a thin CRUD facade so callers don't need to touch
 SQLAlchemy session internals directly.
 """
 
-from __future__ import annotations
 
 import json
 import logging

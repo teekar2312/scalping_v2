@@ -28,7 +28,6 @@ CORS is enabled for the configured Next.js origins (default
 http://localhost:3000).
 """
 
-from __future__ import annotations
 
 import asyncio
 import csv
