@@ -41,15 +41,18 @@ slowapi==0.1.10
 bcrypt==4.2.0
 
 # Sprint 7 #13: scipy for VaR / parametric stats
-scipy==1.14.1
+# Python 3.14 sangat baru — gunakan >= agar pip pilih versi dengan wheel cp314
+# Jika install gagal (build from source), install Visual Studio Build Tools
+# atau gunakan Python 3.12/3.13 yang punya wheel lengkap
+scipy>=1.15.0
 
 # Sprint 8 #20: Prometheus metrics + structured JSON logs
 prometheus-client==0.21.1
 python-json-logger==3.2.1
 
-# Math / data
-numpy==2.1.3
-pandas==2.2.3
+# Math / data (flexible version untuk Python 3.14 compatibility)
+numpy>=2.2.0
+pandas>=2.2.3
 
 # Timezone
 pytz==2024.2
@@ -88,4 +91,4 @@ boto3==1.35.84
 
 # psutil - process / system metrics for /api/system/info + Prometheus gauges
 # (optional - backend falls back to /proc on Linux if not installed)
-psutil==6.1.0
+psutil>=6.1.0
