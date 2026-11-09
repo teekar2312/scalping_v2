@@ -12,7 +12,8 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.17
 
 # MT5 integration (Windows-only)
-MetaTrader5==5.0.4512
+# Version 5.0.4512 sudah tidak ada di PyPI, gunakan >=5.0.5488 (latest stable)
+MetaTrader5>=5.0.5488
 
 # HTTP clients (Ollama + Tiingo + Telegram)
 httpx==0.27.2
@@ -24,7 +25,10 @@ pydantic==2.9.2
 # Database
 sqlalchemy==2.0.36
 # Sprint 5 #2: at-rest encryption (optional - falls back to plaintext SQLite)
-sqlcipher3-binary==0.5.1.post1
+# NOTE: sqlcipher3-binary membutuhkan Visual C++ Build Tools di Windows.
+# Jika install gagal, comment baris ini — backend auto-fallback ke plain SQLite.
+# Alternatif: pip install pysqlcipher3
+sqlcipher3-binary>=0.5.0
 
 # Sprint 5 #3: secret management (Fernet)
 cryptography==43.0.3
