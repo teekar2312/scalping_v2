@@ -25,10 +25,11 @@ pydantic==2.9.2
 # Database
 sqlalchemy==2.0.36
 # Sprint 5 #2: at-rest encryption (optional - falls back to plaintext SQLite)
-# NOTE: sqlcipher3-binary membutuhkan Visual C++ Build Tools di Windows.
-# Jika install gagal, comment baris ini — backend auto-fallback ke plain SQLite.
-# Alternatif: pip install pysqlcipher3
-sqlcipher3-binary>=0.5.0
+# NOTE: sqlcipher3-binary sering tidak tersedia untuk Python 3.14 di Windows.
+# Backend auto-fallback ke plain SQLite jika tidak terinstall.
+# Untuk enable encryption: install manual via `pip install sqlcipher3-binary`
+# setelah tersedia untuk Python version Anda, atau gunakan Python 3.12.
+# sqlcipher3-binary>=0.5.0  # commented out — install manually if needed
 
 # Sprint 5 #3: secret management (Fernet)
 cryptography==43.0.3
