@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTheme } from 'next-themes';
 import { useAppStore, type AppView } from '@/lib/store';
 import {
@@ -117,7 +117,7 @@ export function CommandPalette() {
   }, [open]);
 
   // Global shortcuts that also drive the palette UI itself.
-  const globalShortcuts: KeyboardShortcut[] = [
+  const globalShortcuts: KeyboardShortcut[] = useMemo(() => [
     {
       combo: 'mod+k',
       description: 'Open command palette',
@@ -143,21 +143,24 @@ export function CommandPalette() {
       },
       allowPropagation: true,
     },
-  ];
+  ], []);
 
   useKeyboardShortcuts(globalShortcuts);
 
   // Navigation shortcuts: g d, g c, g s, g p, g j, g a, g n
-  const navShortcuts: KeyboardShortcut[] = NAV_TARGETS.slice(0, 7).map((t, idx) => {
-    const seqMap = ['d', 'c', 's', 'p', 'j', 'a', 'n'];
-    const second = seqMap[idx] ?? t.id[0];
-    return {
-      combo: `g ${second}`,
-      description: `Go to ${t.label}`,
-      group: 'Navigation',
-      handler: () => setActiveView(t.id),
-    } satisfies KeyboardShortcut;
-  });
+  const navShortcuts: KeyboardShortcut[] = useMemo(() =>
+    NAV_TARGETS.slice(0, 7).map((t, idx) => {
+      const seqMap = ['d', 'c', 's', 'p', 'j', 'a', 'n'];
+      const second = seqMap[idx] ?? t.id[0];
+      return {
+        combo: `g ${second}`,
+        description: `Go to ${t.label}`,
+        group: 'Navigation',
+        handler: () => setActiveView(t.id),
+      } satisfies KeyboardShortcut;
+    }),
+    [setActiveView]
+  );
   useKeyboardShortcuts(navShortcuts);
 
   // Refresh recent list whenever palette closes (so user sees latest history).

@@ -189,6 +189,9 @@ export function getRecentShortcuts(): string[] {
  */
 export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[] = []) {
   const idsRef = useRef<number[]>([]);
+  // Store shortcuts in a ref so we can compare content without re-running effect
+  const shortcutsRef = useRef<KeyboardShortcut[]>(shortcuts);
+  const prevSigRef = useRef<string>('');
 
   const registerShortcut = useCallback((s: KeyboardShortcut): (() => void) => {
     const id = nextId++;
@@ -206,8 +209,20 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[] = []) {
     emitChange();
   }, []);
 
+  // Update ref on every render so effect can read latest
+  shortcutsRef.current = shortcuts;
+
   useEffect(() => {
-    // Register the provided shortcuts on mount / change.
+    // Only re-register if the actual content changed (not just array identity)
+    const sig = JSON.stringify(shortcuts.map((s) => ({ combo: s.combo, description: s.description, group: s.group })));
+    if (sig === prevSigRef.current) return;
+    prevSigRef.current = sig;
+
+    // Clean up old registrations
+    for (const id of idsRef.current) {
+      store.subscriptions.delete(id);
+    }
+    // Register new shortcuts
     const newIds: number[] = [];
     for (const s of shortcuts) {
       const id = nextId++;
@@ -220,7 +235,6 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[] = []) {
       for (const id of newIds) {
         store.subscriptions.delete(id);
       }
-      emitChange();
     };
   }, [shortcuts]);
 
