@@ -29,12 +29,19 @@ export function initAuthBridge(): void {
 export async function login(username: string, password: string): Promise<AuthUser> {
   initAuthBridge();
   const res = await apiLogin(username, password);
+  // Handle both formats: backend flat {username, role} OR nested {user: {username, role}}
+  const user: AuthUser = res.user
+    ? res.user
+    : {
+        username: (res as any).username || username,
+        role: ((res as any).role || 'viewer').toLowerCase(),
+      };
   useAppStore.getState().setAuth(res.api_key, {
-    ...res.user,
+    ...user,
     login_at: new Date().toISOString(),
     ip: typeof window !== 'undefined' ? 'client' : undefined,
   });
-  return res.user;
+  return user;
 }
 
 /** Demo-mode auto-login (used by the login view's "Enter demo mode" button). */

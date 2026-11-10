@@ -1514,7 +1514,7 @@ def ensure_default_admin() -> dict[str, Any]:
         ).scalar_one_or_none()
         if existing is not None:
             return _user_to_dict(existing)
-        password = _os.environ.get("ADMIN_PASSWORD", "").strip()
+        password = _os.environ.get("ADMIN_PASSWORD", "")
         generated = False
         if not password:
             password = _secrets.token_urlsafe(18)

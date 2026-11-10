@@ -175,6 +175,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Starting Forex scalping backend (Python %s)", sys.version)
     # Initialise DB
     get_db()
+    # Ensure default admin user exists (audit-fix: chicken-and-egg deadlock)
+    try:
+        from database import ensure_default_admin
+        admin_info = ensure_default_admin()
+        if admin_info:
+            logger.info("Admin user ready: username=%s role=%s", admin_info.get("username"), admin_info.get("role"))
+    except Exception as exc:
+        logger.warning("ensure_default_admin failed: %s", exc)
     # Warm MT5 connection (non-fatal if it fails - routes will report)
     if MT5_AVAILABLE:
         try:
@@ -2259,9 +2267,16 @@ async def api_auth_login(request: Request,
     if not res.ok:
         raise HTTPException(status_code=401, detail={"ok": False,
                                                      "message": res.message})
+    # Return format matching frontend AuthLoginResponse type:
+    # {ok, api_key, expires_at, user: {username, role}, message}
     return {
         "ok": True,
         "api_key": res.api_key,
+        "expires_at": None,
+        "user": {
+            "username": res.username,
+            "role": res.role.lower() if res.role else "viewer",
+        },
         "username": res.username,
         "role": res.role,
         "message": res.message,
