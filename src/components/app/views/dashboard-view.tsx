@@ -560,9 +560,9 @@ function DashboardViewInner() {
       .then(([s, t, sig, n, eq]) => {
         if (!mounted) return;
         setStatus(s);
-        setTrades(t);
-        setSignals(sig);
-        setNews(n);
+        setTrades(Array.isArray(t) ? t : []);
+        setSignals(Array.isArray(sig) ? sig : []);
+        setNews(Array.isArray(n) ? n : []);
         setEquity(eq);
       })
       .finally(() => mounted && setLoading(false));

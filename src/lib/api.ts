@@ -222,22 +222,26 @@ export async function getBotState(): Promise<BotState> {
 
 export async function getOpenTrades(): Promise<Trade[]> {
   if (IS_DEMO) return getDemoOpenTrades();
-  return fetchAPI<Trade[]>('/api/positions');
+  const res = await fetchAPI<any>('/api/positions');
+  return Array.isArray(res) ? res : (res.positions ?? []);
 }
 
 export async function getTradeHistory(): Promise<Trade[]> {
   if (IS_DEMO) return getDemoTradeHistory(30);
-  return fetchAPI<Trade[]>('/api/journal?status=CLOSED');
+  const res = await fetchAPI<any>('/api/journal?status=CLOSED');
+  return Array.isArray(res) ? res : (res.trades ?? []);
 }
 
 export async function getSignals(): Promise<Signal[]> {
   if (IS_DEMO) return getDemoSignals();
-  return fetchAPI<Signal[]>('/api/signals');
+  const res = await fetchAPI<any>('/api/signals');
+  return Array.isArray(res) ? res : (res.signals ?? []);
 }
 
 export async function getNews(): Promise<NewsEvent[]> {
   if (IS_DEMO) return getDemoNews();
-  return fetchAPI<NewsEvent[]>('/api/news');
+  const res = await fetchAPI<any>('/api/news');
+  return Array.isArray(res) ? res : (res.events ?? []);
 }
 
 export async function getChartData(symbol: string): Promise<ChartData> {
