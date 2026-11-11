@@ -120,7 +120,7 @@ export function PositionsView() {
                       <td className="text-right tabular-nums font-semibold">{t.rrNet.toFixed(2)}</td>
                       <td className="text-right tabular-nums">{t.adxValue.toFixed(1)}</td>
                       <td className="text-right tabular-nums">{t.atrValue.toFixed(1)}</td>
-                      <td className="text-right text-[10px]">{t.setupType.replace('_', ' ')}</td>
+                      <td className="text-right text-[10px]">{t.setupType?.replace('_', ' ') ?? '—'}</td>
                       <td className="text-right text-[10px]">{t.session}</td>
                       <td className="text-right tabular-nums text-[10px]">
                         {new Date(t.entryTime).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' })}

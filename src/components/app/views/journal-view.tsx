@@ -815,7 +815,7 @@ export function JournalView() {
                           <td className="text-right tabular-nums">{t.atrValue.toFixed(1)}</td>
                           <td className="text-right tabular-nums">{t.adxValue.toFixed(1)}</td>
                           <td className="text-right tabular-nums font-semibold">{t.rrNet.toFixed(2)}</td>
-                          <td className="text-left text-[10px]">{t.setupType.replace('_', ' ')}</td>
+                          <td className="text-left text-[10px]">{t.setupType?.replace('_', ' ') ?? '—'}</td>
                           <td className="text-left text-[10px]">{t.session}</td>
                           <td>
                             <Badge
@@ -851,7 +851,7 @@ export function JournalView() {
                           </td>
                           <td className="text-right">
                             <div className="flex gap-0.5 justify-end">
-                              {t.checklist.map((c) => (
+                              {(t.checklist ?? []).map((c) => (
                                 <div
                                   key={c.point}
                                   className={cn('h-2 w-2 rounded-sm', c.passed ? 'bg-bull' : 'bg-bear')}
@@ -970,7 +970,7 @@ export function JournalView() {
                 </div>
                 <div className="max-h-[260px] overflow-y-auto scroll-thin">
                   {trades
-                    .filter((t) => t.rrNet < 2.0 || t.checklist.some((c) => !c.passed))
+                    .filter((t) => t.rrNet < 2.0 || (t.checklist ?? []).some((c) => !c.passed))
                     .slice(0, 20)
                     .map((t) => (
                       <div
@@ -982,14 +982,14 @@ export function JournalView() {
                         </Badge>
                         <span className="font-medium">{t.symbol}</span>
                         <span className="text-muted-foreground">
-                          RR {t.rrNet.toFixed(2)} · {t.checklist.filter((c) => !c.passed).length}/8 fail
+                          RR {t.rrNet.toFixed(2)} · {(t.checklist ?? []).filter((c) => !c.passed).length}/8 fail
                         </span>
                         <span className="ml-auto text-muted-foreground tabular-nums">
                           {new Date(t.entryTime).toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', timeZone: 'Asia/Jakarta' })}
                         </span>
                       </div>
                     ))}
-                  {trades.filter((t) => t.rrNet < 2.0 || t.checklist.some((c) => !c.passed)).length === 0 && (
+                  {trades.filter((t) => t.rrNet < 2.0 || (t.checklist ?? []).some((c) => !c.passed)).length === 0 && (
                     <div className="text-xs text-muted-foreground py-4 text-center">
                       Semua trade compliant.
                     </div>

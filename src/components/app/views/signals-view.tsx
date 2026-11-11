@@ -118,7 +118,7 @@ export function SignalsView() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <div className="text-muted-foreground text-[10px]">Setup Type</div>
-                  <div className="font-medium">{sig.setupType.replace('_', ' ')}</div>
+                  <div className="font-medium">{sig.setupType?.replace('_', ' ') ?? '—'}</div>
                 </div>
                 <div>
                   <div className="text-muted-foreground text-[10px]">Session</div>
@@ -164,7 +164,7 @@ export function SignalsView() {
                   </span>
                 </div>
                 <div className="flex gap-0.5">
-                  {sig.checklist.map((c) => (
+                  {(sig.checklist ?? []).map((c) => (
                     <div
                       key={c.point}
                       className={cn(
@@ -230,7 +230,7 @@ export function SignalsView() {
                           </div>
                           <div>
                             <div className="text-muted-foreground">Setup</div>
-                            <div className="font-mono">{sig.setupType.replace('_', ' ')}</div>
+                            <div className="font-mono">{sig.setupType?.replace('_', ' ') ?? '—'}</div>
                           </div>
                         </div>
                       </div>
@@ -239,7 +239,7 @@ export function SignalsView() {
                       <div className="rounded-md border p-3">
                         <div className="mb-2 text-xs font-medium">8-Point V2 Checklist</div>
                         <div className="flex flex-col gap-1.5">
-                          {sig.checklist.map((c) => (
+                          {(sig.checklist ?? []).map((c) => (
                             <div key={c.point} className="flex items-start gap-2 text-xs">
                               {c.passed ? (
                                 <CheckCircle2 className="h-3.5 w-3.5 text-bull shrink-0 mt-0.5" />

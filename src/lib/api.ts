@@ -140,6 +140,19 @@ import {
   getDemoSwapsReport,
   getDemoTickBacktest,
 } from './mock-data';
+import {
+  transformAccount,
+  transformAiAnalyzeResponse,
+  transformAiChatResponse,
+  transformBotState,
+  transformChartData,
+  transformDailyRisk,
+  transformNewsEvent,
+  transformSignal,
+  transformSystemStatus,
+  transformTrade,
+  serializeSettings,
+} from './api-backend-adapter';
 
 // In demo mode (sandbox), use Next.js API routes that return mock data
 // In production (Windows with Python backend), set NEXT_PUBLIC_PYTHON_API_URL
@@ -207,46 +220,75 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 
 export async function getSystemStatus(): Promise<SystemStatus> {
   if (IS_DEMO) return getDemoSystemStatus();
-  return fetchAPI<SystemStatus>('/api/status');
+  const res = await fetchAPI<unknown>('/api/status');
+  return transformSystemStatus(res);
 }
 
 export async function getAccount(): Promise<Account> {
   if (IS_DEMO) return getDemoAccount();
-  return fetchAPI<Account>('/api/account');
+  const res = await fetchAPI<unknown>('/api/account');
+  return transformAccount(res) ?? {
+    login: 0,
+    server: '',
+    broker: '',
+    currency: 'USD',
+    leverage: 100,
+    balance: 0,
+    equity: 0,
+    margin: 0,
+    marginFree: 0,
+    marginLevel: 0,
+    profit: 0,
+    lastSync: new Date().toISOString(),
+  };
 }
 
 export async function getBotState(): Promise<BotState> {
   if (IS_DEMO) return getDemoBotState();
-  return fetchAPI<SystemStatus>('/api/status').then((s) => s.bot);
+  // Backend exposes bot state either as a standalone /api/bot endpoint or nested
+  // inside /api/status as `bot_state`. Try the dedicated endpoint first, fall
+  // back to the status payload.
+  try {
+    const res = await fetchAPI<unknown>('/api/bot');
+    return transformBotState(res);
+  } catch {
+    const res = await fetchAPI<unknown>('/api/status');
+    return transformBotState((res as Record<string, unknown>).bot_state ?? res);
+  }
 }
 
 export async function getOpenTrades(): Promise<Trade[]> {
   if (IS_DEMO) return getDemoOpenTrades();
-  const res = await fetchAPI<any>('/api/positions');
-  return Array.isArray(res) ? res : (res.positions ?? []);
+  const res = await fetchAPI<unknown>('/api/positions');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>).positions ?? []);
+  return (arr as unknown[]).map(transformTrade);
 }
 
 export async function getTradeHistory(): Promise<Trade[]> {
   if (IS_DEMO) return getDemoTradeHistory(30);
-  const res = await fetchAPI<any>('/api/journal?status=CLOSED');
-  return Array.isArray(res) ? res : (res.trades ?? []);
+  const res = await fetchAPI<unknown>('/api/journal?status=CLOSED');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>).trades ?? []);
+  return (arr as unknown[]).map(transformTrade);
 }
 
 export async function getSignals(): Promise<Signal[]> {
   if (IS_DEMO) return getDemoSignals();
-  const res = await fetchAPI<any>('/api/signals');
-  return Array.isArray(res) ? res : (res.signals ?? []);
+  const res = await fetchAPI<unknown>('/api/signals');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>).signals ?? []);
+  return (arr as unknown[]).map(transformSignal);
 }
 
 export async function getNews(): Promise<NewsEvent[]> {
   if (IS_DEMO) return getDemoNews();
-  const res = await fetchAPI<any>('/api/news');
-  return Array.isArray(res) ? res : (res.events ?? []);
+  const res = await fetchAPI<unknown>('/api/news');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>).events ?? []);
+  return (arr as unknown[]).map(transformNewsEvent);
 }
 
 export async function getChartData(symbol: string): Promise<ChartData> {
   if (IS_DEMO) return getDemoChartData(symbol);
-  return fetchAPI<ChartData>(`/api/chart/${symbol}`);
+  const res = await fetchAPI<unknown>(`/api/chart/${symbol}`);
+  return transformChartData(res);
 }
 
 export async function controlBot(action: 'start' | 'stop' | 'kill'): Promise<{ success: boolean; message: string }> {
@@ -264,12 +306,19 @@ export async function aiChat(messages: ChatMessage[], context?: string): Promise
     await new Promise((r) => setTimeout(r, 800 + Math.random() * 800));
     return generateDemoAIResponse(userText, context);
   }
-  const res = await fetchAPI<{ response: string }>('/api/ai/chat', {
+  // Backend Pydantic expects: { message: string, history: [{role, content}] }
+  const lastUser = messages.filter((m) => m.role === 'user').pop();
+  const history = messages.slice(0, -1).map((m) => ({ role: m.role, content: m.content }));
+  const res = await fetchAPI<unknown>('/api/ai/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context }),
+    body: JSON.stringify({
+      message: lastUser?.content ?? '',
+      history,
+      ...(context ? { context } : {}),
+    }),
   });
-  return res.response;
+  return transformAiChatResponse(res);
 }
 
 export async function analyzeSetup(signal: Signal): Promise<string> {
@@ -280,12 +329,18 @@ export async function analyzeSetup(signal: Signal): Promise<string> {
       ? `COMPLIANT — Setup ${signal.direction} ${signal.symbol} sesuai V2 strategy. ADX=${signal.adxValue.toFixed(1)} trending (>25 ✓), RR net=${signal.rrNet.toFixed(2)} ≥ 2.0 ✓, checklist ${signal.checklistPassed}/8 ✓. ${signal.setupType} terkonfirmasi di sesi ${signal.session}. REKOMENDASI: Eksekusi dengan lot sesuai risk 1%.`
       : `NON-COMPLIANT — Setup tidak memenuhi V2. ${signal.checklistPassed < 8 ? `Checklist hanya ${signal.checklistPassed}/8.` : ''} ${signal.rrNet < 2.0 ? `RR net ${signal.rrNet.toFixed(2)} < 2.0 minimum.` : ''} REKOMENDASI: SKIP sesuai aturan emas #1 & #2.`;
   }
-  const res = await fetchAPI<{ verdict: string }>('/api/ai/analyze', {
+  // Backend Pydantic expects: { signal: { ...fields, direction: "buy"|"sell" lowercase } }
+  const res = await fetchAPI<unknown>('/api/ai/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(signal),
+    body: JSON.stringify({
+      signal: {
+        ...signal,
+        direction: signal.direction.toLowerCase(),
+      },
+    }),
   });
-  return res.verdict;
+  return transformAiAnalyzeResponse(res);
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -313,11 +368,23 @@ export async function getSettings(): Promise<Settings> {
 
 export async function saveSettings(settings: Settings): Promise<{ success: boolean }> {
   if (IS_DEMO) return { success: true };
-  return fetchAPI('/api/settings', {
+  // Backend expects: { settings: { flat key-value dict } }
+  const flat = serializeSettings(settings);
+  const res = await fetchAPI<unknown>('/api/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(settings),
+    body: JSON.stringify({ settings: flat }),
   });
+  const obj = (res && typeof res === 'object' ? res : {}) as Record<string, unknown>;
+  return { success: asSuccess(obj) };
+}
+
+function asSuccess(obj: Record<string, unknown>): boolean {
+  if (typeof obj.success === 'boolean') return obj.success;
+  if (typeof obj.ok === 'boolean') return obj.ok;
+  if (typeof obj.status === 'string') return obj.status.toLowerCase() === 'ok' || obj.status.toLowerCase() === 'success';
+  // If backend returns nothing but didn't throw, treat as success.
+  return true;
 }
 
 // --------------------------------------------------------------------------- //

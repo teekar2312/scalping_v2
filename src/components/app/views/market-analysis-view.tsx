@@ -137,6 +137,17 @@ export function MarketAnalysisView() {
     getEconomicSurpriseIndex(surpriseDays).then(setSurprise).catch(() => {});
   }, [surpriseDays]);
 
+  // Safety: coerce all backend array fields to real arrays so .map() never crashes
+  // on responses that omit a field or return a single scalar.
+  const currencies = Array.isArray(strength?.currencies) ? strength!.currencies : [];
+  const volLevels = Array.isArray(volProfile?.levels) ? volProfile!.levels : [];
+  const corrPairs = Array.isArray(correlation?.pairs) ? correlation!.pairs : [];
+  const corrMatrix = Array.isArray(correlation?.matrix) ? correlation!.matrix : [];
+  const volTenors = Array.isArray(volSurface?.tenors) ? volSurface!.tenors : [];
+  const orderFlowLevels = Array.isArray(orderFlow?.levels) ? orderFlow!.levels : [];
+  const sentimentItems = Array.isArray(sentiment?.items) ? sentiment!.items : [];
+  const surpriseEntries = Array.isArray(surprise?.entries) ? surprise!.entries : [];
+
   if (loading && !strength) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -230,7 +241,7 @@ export function MarketAnalysisView() {
           {strength && (
             <ResponsiveContainer width="100%" height={260}>
               <BarChart
-                data={strength.currencies}
+                data={currencies}
                 layout="vertical"
                 margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
               >
@@ -259,7 +270,7 @@ export function MarketAnalysisView() {
                 />
                 <ReferenceLine x={0} stroke="var(--muted-foreground)" />
                 <Bar dataKey="strength" radius={[0, 4, 4, 0]}>
-                  {strength.currencies.map((c, idx) => (
+                  {currencies.map((c, idx) => (
                     <Cell
                       key={idx}
                       fill={c.strength >= 50 ? '#10b981' : c.strength >= 0 ? '#84cc16' : c.strength >= -50 ? '#f59e0b' : '#ef4444'}
@@ -298,7 +309,7 @@ export function MarketAnalysisView() {
                 </div>
                 <ResponsiveContainer width="100%" height={240}>
                   <BarChart
-                    data={volProfile.levels}
+                    data={volLevels}
                     layout="vertical"
                     margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
                   >
@@ -325,7 +336,7 @@ export function MarketAnalysisView() {
                       ]}
                     />
                     <Bar dataKey="volume" radius={[0, 4, 4, 0]}>
-                      {volProfile.levels.map((lvl, idx) => (
+                      {volLevels.map((lvl, idx) => (
                         <Cell
                           key={idx}
                           fill={
@@ -355,7 +366,7 @@ export function MarketAnalysisView() {
         >
           <div className="pt-3">
             {correlation && (
-              <CorrelationHeatmap pairs={correlation.pairs} matrix={correlation.matrix} />
+              <CorrelationHeatmap pairs={corrPairs} matrix={corrMatrix} />
             )}
           </div>
         </PanelCard>
@@ -371,7 +382,7 @@ export function MarketAnalysisView() {
           <div className="pt-3">
             {volSurface ? (
               <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={volSurface.tenors} margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+                <BarChart data={volTenors} margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="tenor" tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
                   <YAxis tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" width={50} unit="%" />
@@ -432,7 +443,7 @@ export function MarketAnalysisView() {
                       </tr>
                     </thead>
                     <tbody>
-                      {orderFlow.levels.map((lvl, idx) => (
+                      {orderFlowLevels.map((lvl, idx) => (
                         <tr key={idx} className="border-b last:border-0">
                           <td className="py-1 font-mono tabular-nums">{lvl.price}</td>
                           <td className="text-right tabular-nums text-bull">{lvl.bid_volume}</td>
@@ -469,7 +480,7 @@ export function MarketAnalysisView() {
         <div className="pt-3">
           {sentiment && (
             <div className="flex flex-col gap-1.5">
-              {sentiment.items.map((item) => (
+              {sentimentItems.map((item) => (
                 <div
                   key={item.id}
                   className="flex items-start gap-2 rounded-md border p-2 text-xs"
@@ -493,17 +504,19 @@ export function MarketAnalysisView() {
                       <span>{item.source}</span>
                       <span>·</span>
                       <span>
-                        {new Date(item.published_at).toLocaleString('id-ID', {
-                          day: '2-digit',
-                          month: 'short',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          timeZone: 'Asia/Jakarta',
-                        })}
+                        {item.published_at
+                          ? new Date(item.published_at).toLocaleString('id-ID', {
+                              day: '2-digit',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              timeZone: 'Asia/Jakarta',
+                            })
+                          : '—'}
                       </span>
                       <span>·</span>
-                      <span>conf {(item.confidence * 100).toFixed(0)}%</span>
-                      {item.affected_currencies.length > 0 && (
+                      <span>conf {((item.confidence ?? 0) * 100).toFixed(0)}%</span>
+                      {Array.isArray(item.affected_currencies) && item.affected_currencies.length > 0 && (
                         <>
                           <span>·</span>
                           <span className="flex items-center gap-0.5">
@@ -533,7 +546,7 @@ export function MarketAnalysisView() {
         <div className="pt-3">
           {surprise && (
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={surprise.entries} margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+              <BarChart data={surpriseEntries} margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="currency" tick={{ fontSize: 10 }} stroke="var(--muted-foreground)" />
                 <YAxis
@@ -554,7 +567,7 @@ export function MarketAnalysisView() {
                 />
                 <ReferenceLine y={0} stroke="var(--muted-foreground)" />
                 <Bar dataKey="surprise_score" radius={[4, 4, 0, 0]}>
-                  {surprise.entries.map((e, idx) => (
+                  {surpriseEntries.map((e, idx) => (
                     <Cell
                       key={idx}
                       fill={

@@ -1499,6 +1499,58 @@ def update_user_api_key(user_id: int, api_key: str) -> bool:
         return True
 
 
+def list_users() -> list[dict[str, Any]]:
+    """Return all users (BACKEND-FIXES-2: ``GET /api/auth/keys``).
+
+    Each row is returned as a dict via :func:`_user_to_dict`.  Callers that
+    need to expose API keys must apply their own masking (e.g. preview only
+    the first 8 chars) - this function returns the full row to support
+    admin tooling that may need to revoke a specific key.
+    """
+    db = get_db()
+    with db.session() as s:
+        rows = s.execute(select(User).order_by(User.id.asc())).scalars().all()
+        return [_user_to_dict(r) for r in rows if r is not None]
+
+
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """Replace the password hash on a user row (BACKEND-FIXES-2).
+
+    Called by ``POST /api/auth/change-password`` after the caller has
+    verified the current password and produced the new bcrypt hash via
+    :func:`auth.hash_password`.
+    """
+    db = get_db()
+    with db.session() as s:
+        row = s.get(User, int(user_id))
+        if row is None:
+            return False
+        row.password_hash = password_hash
+        return True
+
+
+def get_user(user_id: int) -> dict[str, Any] | None:
+    """Fetch a single user row by id (BACKEND-FIXES-2)."""
+    db = get_db()
+    with db.session() as s:
+        row = s.get(User, int(user_id))
+        return _user_to_dict(row) if row else None
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a user row by id (BACKEND-FIXES-2: ``DELETE /api/auth/keys/{id}``).
+
+    Returns True if a row was deleted, False if the id did not exist.
+    """
+    db = get_db()
+    with db.session() as s:
+        row = s.get(User, int(user_id))
+        if row is None:
+            return False
+        s.delete(row)
+        return True
+
+
 def ensure_default_admin() -> dict[str, Any]:
     """Create a default ``admin`` user on first run if none exists.
 
@@ -1910,6 +1962,8 @@ __all__ = [
     "get_user_by_username", "get_user_by_api_key", "create_user",
     "update_user_api_key", "ensure_default_admin",
     "insert_stress_test_result", "get_stress_test_result",
+    # BACKEND-FIXES-2: user CRUD helpers for /api/auth/keys + change-password
+    "list_users", "get_user", "update_user_password", "delete_user",
     # BACKEND-100 #12 swap CRUD
     "insert_swap_record", "list_swap_records",
     "swap_summary_by_day", "swap_summary_by_symbol",

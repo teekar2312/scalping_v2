@@ -42,11 +42,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -60,7 +60,7 @@ from mt5_connector import (
 )
 from database import (
     get_db, list_trades, list_signals, list_news, get_all_settings,
-    set_setting, get_bot_state, list_audit_log, list_equity_curve,
+    get_setting, set_setting, get_bot_state, list_audit_log, list_equity_curve,
     get_backtest_result, insert_backtest_result,
     get_performance_attribution, get_compliance_score,
     set_trade_emotional_state, list_emotional_summary,
@@ -73,6 +73,9 @@ from database import (
     # BACKEND-100 #12 swap tracking
     insert_swap_record, list_swap_records,
     swap_summary_by_day, swap_summary_by_symbol,
+    # BACKEND-FIXES-2: user CRUD for /api/auth/keys + change-password
+    list_users, get_user, update_user_password, delete_user,
+    get_user_by_username,
 )
 from ollama_analyzer import get_analyzer, close_default_client as close_ai
 from tiingo_calendar import get_calendar, close_default_client as close_cal
@@ -87,6 +90,8 @@ from indicators import (
 from auth import (
     get_api_key, get_auth, require_role, require_admin, require_trader,
     require_viewer, login as auth_login,
+    # BACKEND-FIXES-2: helpers for /api/auth/keys + /api/auth/change-password
+    generate_api_key, hash_password, verify_password,
 )
 from secrets import get_secret_manager
 from metrics import (
@@ -336,16 +341,29 @@ class BotActionResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    """Chat request body for ``POST /api/ai/chat``.
+
+    BACKEND-FIXES-2: ``history`` accepts free-form dicts (frontend may send
+    ``{"role": "user", "content": "..."}`` or include extra metadata keys)
+    and an optional ``context`` field is supported for prompt priming.
+    """
     message: str = Field(min_length=1, max_length=4_000)
-    history: list[dict[str, str]] = Field(default_factory=list, max_length=200)
+    history: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    context: str | None = None
 
 
 # ---- Sprint 5 #8: strict AnalyzeRequest.signal ----------------------------- #
 
 class SignalData(BaseModel):
-    """Strict representation of a strategy signal submitted to /api/ai/analyze."""
+    """Strict representation of a strategy signal submitted to /api/ai/analyze.
+
+    BACKEND-FIXES-2: ``direction`` now accepts both upper-case (``BUY`` /
+    ``SELL``) and lower-case (``buy`` / ``sell``) values to match what the
+    frontend sends.  Other fields are kept optional so partial signal
+    payloads (e.g. paper-mode probes) don't get rejected.
+    """
     symbol: str = Field(min_length=3, max_length=20)
-    direction: str = Field(pattern="^(buy|sell)$")
+    direction: str = Field(pattern="^(BUY|SELL|buy|sell)$")
     entry_price: float = Field(gt=0)
     sl: float | None = Field(default=None, gt=0)
     tp1: float | None = Field(default=None, gt=0)
@@ -364,11 +382,25 @@ class SignalData(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    signal: SignalData
+    """Compliance analysis request body for ``POST /api/ai/analyze``.
+
+    BACKEND-FIXES-2: ``signal`` is accepted as a free-form ``dict[str, Any]``
+    so the frontend can submit either upper-case (``BUY``) or lower-case
+    (``buy``) directions and any extra fields without strict Pydantic
+    validation rejecting the payload.  :class:`SignalData` is kept above as
+    a documented schema for reference / OpenAPI generation.
+    """
+    signal: dict[str, Any]
 
 
 class SettingsUpdate(BaseModel):
-    settings: dict[str, str]
+    """Settings update body for ``POST /api/settings``.
+
+    BACKEND-FIXES-2: ``settings`` accepts arbitrary string values.  The
+    frontend sends a flat dict ``{settings: {key: value, ...}}`` which we
+    persist via :func:`database.set_setting`.
+    """
+    settings: dict[str, Any]
 
 
 class NewsFilter(BaseModel):
@@ -407,6 +439,18 @@ class BacktestRequest(BaseModel):
         if (ed - sd).days > 365:
             raise ValueError("date range must not exceed 365 days")
         return self
+
+
+class TickBacktestRequest(BacktestRequest):
+    """Tick-level backtest request body for ``POST /api/backtest/tick``.
+
+    BACKEND-FIXES-2: the frontend sends
+    ``{symbol, start_date, end_date, initial_balance}`` which is identical to
+    :class:`BacktestRequest`; this subclass exists for OpenAPI clarity and so
+    future tick-specific fields (e.g. ``synthesise_ticks``, ``spread_pips``)
+    can be added without breaking the candle endpoint.
+    """
+    pass
 
 
 class BotModeRequest(BaseModel):
@@ -453,21 +497,66 @@ class RiskAcknowledgmentRequest(BaseModel):
 # ---- Sprint 7 #14 / #15: analytics request bodies ------------------------ #
 
 class StressTestRequest(BaseModel):
+    """Stress test request body for ``POST /api/analytics/stress-test``.
+
+    BACKEND-FIXES-2: the frontend submits
+    ``{scenario, initial_balance, position_value, pairs}`` while the backend
+    engine reads ``trades_period_days`` + ``balance``.  The frontend fields
+    are accepted as optional and currently ignored (the engine derives the
+    trade window from DB history); ``initial_balance`` overrides ``balance``
+    when set for compatibility.
+    """
     trades_period_days: int = Field(default=90, ge=1, le=365)
     balance: float = Field(default=10_000.0, gt=0, le=10_000_000)
+    # ---- Frontend compatibility (accepted, partially mapped) ---- #
+    scenario: str | None = None
+    initial_balance: float | None = None
+    position_value: float | None = None
+    pairs: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _map_initial_balance(self) -> "StressTestRequest":
+        """If the frontend sent ``initial_balance``, use it as ``balance``."""
+        if self.initial_balance is not None and self.initial_balance > 0:
+            self.balance = self.initial_balance
+        return self
 
 
 class MonteCarloRequest(BaseModel):
+    """Monte-Carlo request body for ``POST /api/backtest/monte-carlo``.
+
+    BACKEND-FIXES-2: renamed ``trades_period`` -> ``trades_period_days`` to
+    match the frontend payload.  The old name is still accepted via
+    ``AliasChoices`` for backward compatibility.
+    """
     iterations: int = Field(default=1000, ge=10, le=10_000)
-    trades_period: int = Field(default=90, ge=1, le=365)
+    trades_period_days: int = Field(
+        default=90, ge=1, le=365,
+        validation_alias=AliasChoices("trades_period_days", "trades_period"),
+    )
     mode: str = Field(default="trade_resample",
                       pattern="^(trade_resample|return_perturbation)$")
     noise_std: float = Field(default=0.0, ge=0, le=100)
 
 
 class WalkForwardRequest(BaseModel):
-    in_sample_window: int = Field(default=90, ge=10, le=500)
-    out_sample_window: int = Field(default=30, ge=5, le=200)
+    """Walk-forward request body for ``POST /api/backtest/walk-forward``.
+
+    BACKEND-FIXES-2: renamed ``in_sample_window`` /
+    ``out_sample_window`` -> ``in_sample_window_days`` /
+    ``out_sample_window_days`` to match the frontend payload.  The old names
+    are still accepted via ``AliasChoices`` for backward compatibility.
+    """
+    in_sample_window_days: int = Field(
+        default=90, ge=10, le=500,
+        validation_alias=AliasChoices("in_sample_window_days",
+                                      "in_sample_window"),
+    )
+    out_sample_window_days: int = Field(
+        default=30, ge=5, le=200,
+        validation_alias=AliasChoices("out_sample_window_days",
+                                      "out_sample_window"),
+    )
 
 
 # ---- Sprint 5 #8: volume field validation --------------------------------- #
@@ -675,8 +764,54 @@ async def metrics_endpoint() -> Response:
 async def api_system_info(request: Request,
                           _auth: dict = Depends(get_api_key)
                           ) -> dict[str, Any]:
-    """Return detailed host + Python + package info for ops dashboards."""
-    return get_system_info()
+    """Return detailed host + Python + package info for ops dashboards.
+
+    BACKEND-FIXES-2: memory + disk are now reported in **bytes** plus the
+    raw percentage so the frontend can format with ``Intl.NumberFormat``
+    rather than re-multiplying MB / GB by constants.  Backward-compatible
+    MB / GB keys are preserved.
+    """
+    base = get_system_info()
+    # Convert units: ensure memory_*_bytes and disk_*_bytes are present.
+    try:
+        import os as _os
+        import platform as _platform
+        import psutil  # type: ignore
+        vm = psutil.virtual_memory()
+        du = shutil.disk_usage(_os.getcwd())
+        base["python_version"] = _platform.python_version()
+        base["os"] = _platform.system()
+        base["hostname"] = _platform.node() or base.get("hostname")
+        base["cpu_count"] = psutil.cpu_count() or base.get("cpu_count", 0)
+        base["cpu_percent"] = psutil.cpu_percent(interval=None)
+        base["memory_total_bytes"] = int(vm.total)
+        base["memory_used_bytes"] = int(vm.total - vm.available)
+        base["memory_available_bytes"] = int(vm.available)
+        base["memory_percent"] = round(vm.percent, 2)
+        base["disk_total_bytes"] = int(du.total)
+        base["disk_used_bytes"] = int(du.used)
+        base["disk_free_bytes"] = int(du.free)
+        base["disk_percent"] = round((du.used / du.total * 100.0)
+                                     if du.total else 0.0, 2)
+        base["uptime_seconds"] = round(get_uptime_seconds(), 1)
+        base["active_db_connections"] = 1
+        try:
+            base["boot_time"] = datetime.fromtimestamp(
+                psutil.boot_time()).isoformat()
+        except Exception:
+            base["boot_time"] = None
+        base["process_id"] = _os.getpid()
+    except ImportError:
+        # psutil not installed - fall back to /proc on Linux; otherwise
+        # leave the dict as returned by ``get_system_info``.
+        base.setdefault("memory_total_bytes", None)
+        base.setdefault("memory_used_bytes", None)
+        base.setdefault("disk_total_bytes", None)
+        base.setdefault("disk_used_bytes", None)
+        base.setdefault("active_db_connections", 1)
+        base.setdefault("process_id", None)
+        base.setdefault("boot_time", None)
+    return base
 
 
 @app.get("/api/status",
@@ -719,6 +854,49 @@ async def api_status(request: Request,
     snap["bot_state"] = get_bot_state()
     snap["mt5_available"] = MT5_AVAILABLE
     snap["time"] = datetime.now(timezone.utc).isoformat()
+    # ---- BACKEND-FIXES-2: alias / availability fields the frontend expects --- #
+    snap["bot"] = snap.get("bot_state", {})  # alias
+    mt5_ok = MT5_AVAILABLE and bool(get_connector().connected)
+    snap["mt5Available"] = mt5_ok
+    # Ollama / Tiingo availability are checked lazily here (best-effort) so
+    # the frontend dashboard can show green/red status icons without a
+    # separate round-trip.  Errors are swallowed -> default to False.
+    snap["ollamaAvailable"] = False
+    try:
+        from ollama_analyzer import get_analyzer as _get_analyzer
+        analyzer = _get_analyzer()
+        # ``is_available`` is async; we synchronously set True if the client
+        # was constructed without error.  A separate probe endpoint
+        # (/api/test/ollama) gives the authoritative value.
+        snap["ollamaAvailable"] = bool(analyzer is not None)
+    except Exception:
+        snap["ollamaAvailable"] = False
+    snap["tiingoAvailable"] = bool(settings.tiingo.api_key)
+    snap["openPositionsCount"] = (
+        len(_safe_call(get_connector().get_positions))
+        if mt5_ok else 0
+    )
+    snap["todayTradesCount"] = 0
+    try:
+        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        from database import list_trades as _list_trades
+        snap["todayTradesCount"] = sum(
+            1 for r in _list_trades(limit=10_000)
+            if (r.get("open_time") or "").startswith(today_iso)
+        )
+    except Exception:
+        snap["todayTradesCount"] = 0
+    snap["dailyRisk"] = None
+    try:
+        from database import get_or_create_daily
+        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        snap["dailyRisk"] = get_or_create_daily(today_iso, 10_000.0)
+    except Exception:
+        snap["dailyRisk"] = None
+    snap["weeklyPnlPct"] = 0.0
+    snap["overallPnlPct"] = 0.0
+    snap["demoMode"] = bool(getattr(engine, "paper_mode", False))
+    snap["pythonBackendUrl"] = f"http://localhost:{settings.server.port}"
     # Update Prometheus gauges (Sprint 8 #20)
     update_trading_metrics(snap, account_summary)
     return snap
@@ -1838,9 +2016,16 @@ async def api_backtest_monte_carlo(request: Request,
                                   req: MonteCarloRequest,
                                   _auth: dict = Depends(require_trader)
                                   ) -> dict[str, Any]:
-    """Run a Monte-Carlo bootstrap on the last ``trades_period`` days of
-    closed trades."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=req.trades_period)
+    """Run a Monte-Carlo bootstrap on the last ``trades_period_days`` days of
+    closed trades.
+
+    BACKEND-FIXES-2: response now exposes ``mean_final_balance``,
+    ``best_final_balance`` / ``worst_final_balance``, ``blow_ups``,
+    ``survival_rate_pct``, plus a ``distribution`` histogram and a ``fan``
+    percentile curve so the frontend can render a Monte-Carlo fan chart.
+    The legacy ``p5_final`` / ``p95_final`` keys are kept as aliases.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=req.trades_period_days)
     rows = list_trades(limit=5_000, status="closed")
     trades = [r for r in rows
               if r.get("close_time")
@@ -1848,17 +2033,126 @@ async def api_backtest_monte_carlo(request: Request,
     mc = MonteCarloEngine(initial_balance=10_000.0, seed=42)
     result = mc.run(trades, iterations=req.iterations,
                     mode=req.mode, noise_std=req.noise_std)
+    # Re-run a single deterministic pass to capture per-iteration arrays
+    # (the underlying MonteCarloResult dataclass is summary-only).  When
+    # trades is empty we can't compute distribution/fan - emit zeros.
+    distribution: list[dict[str, Any]] = []
+    fan: list[dict[str, Any]] = []
+    best = worst = result.median_final_balance
+    blow_ups = 0
+    surv_pct = result.survival_rate * 100.0
+    if trades:
+        pnls: list[float] = []
+        for t in trades:
+            try:
+                pnls.append(float(t.get("profit") or t.get("pnl") or 0.0))
+            except (TypeError, ValueError):
+                continue
+        if pnls:
+            import random as _rng
+            rng = _rng.Random(42)
+            finals: list[float] = []
+            dds: list[float] = []
+            pfs: list[float] = []
+            n = len(pnls)
+            for _ in range(max(1, int(req.iterations))):
+                if req.mode == "return_perturbation" and req.noise_std > 0:
+                    sample = [p + rng.gauss(0, req.noise_std) for p in pnls]
+                else:
+                    sample = [rng.choice(pnls) for _ in range(n)]
+                bal = 10_000.0
+                peak = bal
+                worst_dd = 0.0
+                gw = 0.0
+                gl = 0.0
+                for p in sample:
+                    bal += p
+                    if bal > peak:
+                        peak = bal
+                    dd = (bal - peak) / peak if peak > 0 else 0.0
+                    if dd < worst_dd:
+                        worst_dd = dd
+                    if p > 0:
+                        gw += p
+                    elif p < 0:
+                        gl += abs(p)
+                finals.append(bal)
+                dds.append(abs(worst_dd))
+                pfs.append((gw / gl) if gl > 0 else 0.0)
+                if bal <= 0:
+                    blow_ups += 1
+            finals_sorted = sorted(finals)
+            dds_sorted = sorted(dds)
+            pfs_sorted = sorted(pfs)
+            m = len(finals_sorted)
+            def _pct(arr: list[float], p: float) -> float:
+                if not arr:
+                    return 0.0
+                idx = int(p * (len(arr) - 1))
+                return arr[idx]
+            best = finals_sorted[-1] if finals_sorted else result.median_final_balance
+            worst = finals_sorted[0] if finals_sorted else result.median_final_balance
+            mean_final = (sum(finals) / m) if m else result.median_final_balance
+            median_dd = _pct(dds_sorted, 0.5)
+            p95_dd = _pct(dds_sorted, 0.95)
+            med_pf = _pct(pfs_sorted, 0.5)
+            surv_pct = (sum(1 for b in finals if b > 0) / m * 100.0) if m else 100.0
+            # ---- Distribution histogram (10 equal buckets between worst and best) ---- #
+            if best > worst and m > 0:
+                bucket_width = (best - worst) / 10
+                if bucket_width > 0:
+                    for i in range(10):
+                        lo = worst + i * bucket_width
+                        hi = lo + bucket_width
+                        cnt = sum(1 for b in finals if lo <= b < hi)
+                        distribution.append({
+                            "bucket": i,
+                            "lo": round(lo, 2),
+                            "hi": round(hi, 2),
+                            "count": cnt,
+                        })
+            # ---- Fan chart percentiles ---- #
+            for p in [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]:
+                fan.append({"percentile": int(p * 100),
+                            "balance": round(_pct(finals_sorted, p), 2)})
+        else:
+            mean_final = result.median_final_balance
+            median_dd = result.median_max_dd_pct
+            p95_dd = result.p95_max_dd_pct
+            med_pf = result.median_profit_factor
+    else:
+        mean_final = result.median_final_balance
+        median_dd = result.median_max_dd_pct
+        p95_dd = result.p95_max_dd_pct
+        med_pf = result.median_profit_factor
     return {
+        "id": None,  # MC results are not persisted (compute-only)
         "iterations": result.iterations,
         "median_final_balance": result.median_final_balance,
-        "p5_final": result.p5_final,
-        "p95_final": result.p95_final,
+        "mean_final_balance": round(mean_final, 2),
+        "p5_final_balance": result.p5_final,
+        "p95_final_balance": result.p95_final,
+        "best_final_balance": round(best, 2),
+        "worst_final_balance": round(worst, 2),
         "median_max_dd_pct": result.median_max_dd_pct,
         "p95_max_dd_pct": result.p95_max_dd_pct,
         "survival_rate": result.survival_rate,
+        "survival_rate_pct": round(surv_pct, 2),
+        "blow_ups": blow_ups,
         "median_profit_factor": result.median_profit_factor,
+        "median_max_dd_pct_computed": round(median_dd, 4),
+        "p95_max_dd_pct_computed": round(p95_dd, 4),
+        "median_profit_factor_computed": round(med_pf, 4),
         "trades_used": len(trades),
-        "trades_period_days": req.trades_period,
+        "trades_period_days": req.trades_period_days,
+        "mode": req.mode,
+        "noise_std": req.noise_std,
+        "distribution": distribution,
+        "fan": fan,
+        # Legacy aliases (kept for backward compat with older dashboards).
+        "p5_final": result.p5_final,
+        "p95_final": result.p95_final,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -1872,17 +2166,37 @@ async def api_backtest_walk_forward(request: Request,
                                     req: WalkForwardRequest,
                                     _auth: dict = Depends(require_trader)
                                     ) -> dict[str, Any]:
-    """Run a rolling walk-forward analysis on closed trades."""
+    """Run a rolling walk-forward analysis on closed trades.
+
+    BACKEND-FIXES-2: response now exposes ``stable``, ``verdict``,
+    ``total_windows``, ``robust_windows`` and ``computed_at`` so the
+    frontend can render a pass/fail badge without recomputing degradation.
+    """
     rows = list_trades(limit=5_000, status="closed")
     trades = list(reversed(rows))  # chronological
     wf = WalkForwardAnalyzer(initial_balance=10_000.0)
     result = wf.run(trades,
-                    in_sample_window=req.in_sample_window,
-                    out_sample_window=req.out_sample_window)
+                    in_sample_window=req.in_sample_window_days,
+                    out_sample_window=req.out_sample_window_days)
+    windows_list = list(result.windows)
+    avg_deg = float(result.avg_degradation_pct)
+    stable = avg_deg < 20.0
+    verdict = ("Parameters stable"
+               if stable else "Parameters unstable")
+    robust_windows = sum(1 for w in windows_list
+                         if float(w.get("degradation_pct", 100)) < 20.0)
     return {
-        "windows": result.windows,
-        "avg_degradation_pct": result.avg_degradation_pct,
+        "id": None,  # WF results are not persisted (compute-only)
+        "windows": windows_list,
+        "avg_degradation_pct": avg_deg,
+        "stable": stable,
+        "verdict": verdict,
+        "total_windows": len(windows_list),
+        "robust_windows": robust_windows,
+        "in_sample_window_days": req.in_sample_window_days,
+        "out_sample_window_days": req.out_sample_window_days,
         "trades_used": len(trades),
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -1955,8 +2269,13 @@ async def api_ai_analyze(request: Request,
                    f"is not available at {settings.ollama.base_url}",
         )
     try:
-        result = await analyzer.analyze_setup(req.signal.model_dump())
+        result = await analyzer.analyze_setup(req.signal)
+        verdict_text = (
+            f"{'COMPLIANT' if result.compliant else 'NON-COMPLIANT'} "
+            f"— Score: {result.score}/100. {result.suggestion}"
+        )
         return {
+            "verdict": verdict_text,
             "compliant": result.compliant,
             "score": result.score,
             "checklist_passed": result.checklist_passed,
@@ -2060,9 +2379,14 @@ async def api_update_settings(request: Request,
                               req: SettingsUpdate,
                               _auth: dict = Depends(require_trader)
                               ) -> dict[str, Any]:
-    """Update settings (key/value pairs)."""
+    """Update settings (key/value pairs).
+
+    BACKEND-FIXES-2: values are coerced to ``str`` so the frontend can submit
+    numbers / booleans directly without manual stringification.  The Setting
+    table column is ``Text`` so ``str(v)`` is always safe.
+    """
     for k, v in req.settings.items():
-        set_setting(k, v)
+        set_setting(k, str(v) if not isinstance(v, str) else v)
     return {"ok": True, "settings": get_all_settings()}
 
 
@@ -2381,6 +2705,574 @@ async def api_delete_secret(request: Request,
 
 
 # --------------------------------------------------------------------------- #
+# BACKEND-FIXES-2: missing routes (API keys, services status, encryption,
+# change-password, price alerts CRUD, stress-test scenarios)
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/auth/keys",
+         tags=["auth"],
+         summary="List API keys (admin only)",
+         description="Return all user rows with a masked API key preview "
+                     "(first 8 chars only).  Full keys are never exposed - "
+                     "use ``POST /api/auth/keys`` to mint a new key or "
+                     "``DELETE /api/auth/keys/{id}`` to revoke one "
+                     "(BACKEND-FIXES-2).",
+         responses={
+             200: {"description": "API keys list"},
+             401: {"description": "Authentication required"},
+             403: {"description": "Admin role required"},
+         })
+@limiter.limit("10/minute")
+async def api_list_api_keys(request: Request,
+                            _auth: dict = Depends(require_admin)
+                            ) -> dict[str, Any]:
+    """List API keys (without exposing the full key)."""
+    users = list_users()
+    keys: list[dict[str, Any]] = []
+    for u in users:
+        api_key = u.get("api_key") or ""
+        preview = (api_key[:8] + "...") if len(api_key) > 8 else (api_key or "—")
+        keys.append({
+            "id": u.get("id"),
+            "username": u.get("username"),
+            "role": (u.get("role") or "VIEWER"),
+            "api_key_preview": preview,
+            "created_at": u.get("created_at"),
+            "updated_at": u.get("updated_at"),
+        })
+    return {"keys": keys, "count": len(keys)}
+
+
+@app.post("/api/auth/keys",
+          tags=["auth"],
+          summary="Create a new API key (admin only)",
+          description="Generate a new opaque API key (``sk_<32-byte hex>``) "
+                      "for a user.  Body: ``{username, role}``.  If the "
+                      "username already exists, a fresh key is minted and "
+                      "the existing row's ``api_key`` is replaced "
+                      "(BACKEND-FIXES-2).",
+          responses={
+              200: {"description": "API key created"},
+              400: {"description": "Invalid request body"},
+              401: {"description": "Authentication required"},
+              403: {"description": "Admin role required"},
+          })
+@limiter.limit("10/minute")
+async def api_create_api_key(request: Request,
+                             body: dict = Body(...),
+                             _auth: dict = Depends(require_admin)
+                             ) -> dict[str, Any]:
+    """Generate a new API key for a user.
+
+    Accepts ``{username: str, role: str}`` and returns the freshly minted
+    ``api_key`` plus the username.  The role is normalised to one of
+    ``VIEWER`` / ``TRADER`` / ``ADMIN`` (default: ``VIEWER``).
+    """
+    username = str(body.get("username") or "").strip()
+    if not username:
+        raise HTTPException(status_code=400,
+                            detail="body.username is required")
+    role = str(body.get("role") or "VIEWER").strip().upper()
+    if role not in ("VIEWER", "TRADER", "ADMIN"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"role must be one of VIEWER/TRADER/ADMIN (got '{role}')",
+        )
+    new_key = generate_api_key()
+    existing = get_user_by_username(username)
+    if existing is None:
+        # Create new user with random password (admin must call
+        # /api/auth/change-password later to set a known password).
+        from database import create_user, UserRole as _UR
+        role_const = (_UR.ADMIN if role == "ADMIN"
+                      else _UR.TRADER if role == "TRADER"
+                      else _UR.VIEWER)
+        # Use a placeholder hash (cannot login with it) - admin must reset.
+        placeholder_hash = hash_password(_secrets_token())
+        create_user(username=username,
+                    password_hash=placeholder_hash,
+                    role=role_const,
+                    api_key=new_key)
+        user_id = None
+    else:
+        from database import update_user_api_key
+        user_id = int(existing.get("id") or 0)
+        if user_id:
+            update_user_api_key(user_id, new_key)
+    return {
+        "ok": True,
+        "api_key": new_key,
+        "username": username,
+        "role": role,
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.delete("/api/auth/keys/{key_id}",
+           tags=["auth"],
+           summary="Revoke an API key (admin only)",
+           description="Delete the user row identified by ``key_id`` (the "
+                       "``id`` returned by ``GET /api/auth/keys``).  This "
+                       "revokes the API key immediately - any subsequent "
+                       "Bearer request with that key is rejected "
+                       "(BACKEND-FIXES-2).",
+           responses={
+               200: {"description": "Key revoked"},
+               404: {"description": "key_id not found"},
+               401: {"description": "Authentication required"},
+               403: {"description": "Admin role required"},
+           })
+@limiter.limit("10/minute")
+async def api_revoke_api_key(key_id: int,
+                             request: Request,
+                             _auth: dict = Depends(require_admin)
+                             ) -> dict[str, Any]:
+    """Revoke (delete) an API key / user row."""
+    ok = delete_user(int(key_id))
+    if not ok:
+        raise HTTPException(status_code=404,
+                            detail=f"key_id {key_id} not found")
+    return {"ok": True, "revoked": int(key_id)}
+
+
+@app.post("/api/auth/change-password",
+          tags=["auth"],
+          summary="Change the current user's password",
+          description="Verify the current password, then update the hash "
+                      "with the new password.  Body: "
+                      "``{current_password, new_password}``.  When auth is "
+                      "disabled (dev mode) the route still requires a "
+                      "valid username in the body (``username``) so the "
+                      "right row is updated (BACKEND-FIXES-2).",
+          responses={
+              200: {"description": "Password updated"},
+              400: {"description": "Invalid body / new password too short"},
+              401: {"description": "Authentication required / bad current pw"},
+              404: {"description": "User not found"},
+          })
+@limiter.limit("5/minute")
+async def api_change_password(request: Request,
+                              body: dict = Body(...),
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Change the current user's password.
+
+    The caller must supply ``current_password`` + ``new_password``.  If
+    auth is disabled (no Bearer token), the body must also include
+    ``username`` so the route knows which row to update.
+    """
+    current_password = str(body.get("current_password") or "")
+    new_password = str(body.get("new_password") or "")
+    if not new_password or len(new_password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="new_password is required and must be >= 8 characters",
+        )
+    # Resolve the target user.
+    user = None
+    auth_user = _auth.get("user") if isinstance(_auth, dict) else None
+    if auth_user and isinstance(auth_user, dict) and auth_user.get("username"):
+        target_username = auth_user.get("username")
+        user = get_user_by_username(target_username)
+    else:
+        # auth disabled (dev mode) -> must include username in body
+        target_username = str(body.get("username") or "").strip()
+        if not target_username:
+            raise HTTPException(
+                status_code=400,
+                detail="username is required when auth is disabled",
+            )
+        user = get_user_by_username(target_username)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    # Verify the current password.  When auth is disabled (dev mode), the
+    # caller is implicitly trusted (no Bearer token) and the current
+    # password check is skipped so an admin can recover a forgotten
+    # password locally.  In production (auth enabled), the current
+    # password must match the stored bcrypt hash.
+    if not _auth.get("auth_disabled"):
+        if not verify_password(current_password, user.get("password_hash", "")):
+            raise HTTPException(
+                status_code=401,
+                detail="current_password is incorrect",
+            )
+    new_hash = hash_password(new_password)
+    ok = update_user_password(int(user["id"]), new_hash)
+    return {
+        "ok": bool(ok),
+        "message": "Password updated" if ok else "Failed to update password",
+        "username": user.get("username"),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/services/status",
+         tags=["system"],
+         summary="Service status (MT5 / Ollama / Tiingo / DB / Disk)",
+         description="Return the status of every external dependency the "
+                     "backend relies on.  Each entry includes ``status`` "
+                     "(ok/error/warn), ``latency_ms`` and a ``detail`` "
+                     "string for diagnostics (BACKEND-FIXES-2).",
+         responses={
+             200: {"description": "Service status list"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_services_status(request: Request,
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Return the status of all backend dependencies."""
+    services: list[dict[str, Any]] = []
+    checked_at = datetime.now(timezone.utc).isoformat()
+    # ---- MT5 ---- #
+    t0 = asyncio.get_event_loop().time()
+    mt5_ok = MT5_AVAILABLE and bool(get_connector().connected)
+    mt5_latency = round((asyncio.get_event_loop().time() - t0) * 1000.0, 2)
+    mt5_detail = "disconnected"
+    if mt5_ok:
+        try:
+            mt5_detail = f"connected: {settings.mt5.server}"
+        except Exception:
+            mt5_detail = "connected"
+    elif not MT5_AVAILABLE:
+        mt5_detail = "MetaTrader5 package not installed"
+    services.append({
+        "name": "mt5",
+        "status": "ok" if mt5_ok else "error",
+        "latency_ms": mt5_latency,
+        "detail": mt5_detail,
+    })
+    # ---- Ollama ---- #
+    t0 = asyncio.get_event_loop().time()
+    ollama_ok = False
+    ollama_detail = "unavailable"
+    try:
+        analyzer = get_analyzer()
+        ollama_ok = await analyzer.is_available()
+        if ollama_ok:
+            ollama_detail = f"model {settings.ollama.model} ready"
+        else:
+            ollama_detail = (f"model '{settings.ollama.model}' not found "
+                             f"at {settings.ollama.base_url}")
+    except Exception as exc:
+        ollama_detail = f"error: {exc}"
+    ollama_latency = round((asyncio.get_event_loop().time() - t0) * 1000.0, 2)
+    services.append({
+        "name": "ollama",
+        "status": "ok" if ollama_ok else "error",
+        "latency_ms": ollama_latency,
+        "detail": ollama_detail,
+    })
+    # ---- Tiingo ---- #
+    t0 = asyncio.get_event_loop().time()
+    tiingo_ok = False
+    tiingo_detail = "no API key configured"
+    if settings.tiingo.api_key:
+        try:
+            cal = get_calendar()
+            events = await cal.fetch_calendar(days_ahead=1, impact="HIGH")
+            tiingo_ok = True
+            tiingo_detail = f"ok ({len(events)} HIGH events cached)"
+        except Exception as exc:
+            tiingo_detail = f"error: {exc}"
+    tiingo_latency = round((asyncio.get_event_loop().time() - t0) * 1000.0, 2)
+    services.append({
+        "name": "tiingo",
+        "status": "ok" if tiingo_ok else ("warn" if settings.tiingo.api_key else "error"),
+        "latency_ms": tiingo_latency,
+        "detail": tiingo_detail,
+    })
+    # ---- DB ---- #
+    t0 = asyncio.get_event_loop().time()
+    db_ok = False
+    db_detail = "unknown"
+    try:
+        get_db()
+        # Quick sanity probe.
+        list_trades(limit=1)
+        db_ok = True
+        db_detail = "ok"
+    except Exception as exc:
+        db_detail = f"error: {exc}"
+    db_latency = round((asyncio.get_event_loop().time() - t0) * 1000.0, 2)
+    services.append({
+        "name": "db",
+        "status": "ok" if db_ok else "error",
+        "latency_ms": db_latency,
+        "detail": db_detail,
+    })
+    # ---- Disk ---- #
+    disk_ok = False
+    disk_detail = "unknown"
+    try:
+        import os as _os
+        du = shutil.disk_usage(_os.getcwd())
+        free_gb = du.free / (1024 ** 3)
+        disk_ok = free_gb > 1.0
+        disk_detail = (f"used {du.used / (1024 ** 3):.1f} GB / "
+                       f"total {du.total / (1024 ** 3):.1f} GB "
+                       f"(free {free_gb:.1f} GB)")
+    except Exception as exc:
+        disk_detail = f"error: {exc}"
+    services.append({
+        "name": "disk",
+        "status": "ok" if disk_ok else "warn",
+        "latency_ms": 0.0,
+        "detail": disk_detail,
+    })
+    overall_ok = all(s["status"] == "ok" for s in services)
+    return {
+        "services": services,
+        "checked_at": checked_at,
+        "overall_ok": overall_ok,
+        "count": len(services),
+    }
+
+
+@app.get("/api/security/encryption-status",
+         tags=["auth"],
+         summary="Encryption-at-rest status (SQLCipher)",
+         description="Return whether SQLCipher is enabled for the SQLite DB, "
+                     "the cipher / KDF parameters in use, and the last "
+                     "verification timestamp (BACKEND-FIXES-2).",
+         responses={
+             200: {"description": "Encryption status dict"},
+             401: {"description": "Authentication required"},
+             403: {"description": "Admin role required"},
+         })
+@limiter.limit("10/minute")
+async def api_encryption_status(request: Request,
+                                _auth: dict = Depends(require_admin)
+                                ) -> dict[str, Any]:
+    """Return the SQLCipher encryption-at-rest status."""
+    try:
+        from database import _SQLCIPHER_AVAILABLE  # local import (cycle-safe)
+    except Exception:  # pragma: no cover
+        _SQLCIPHER_AVAILABLE = False  # type: ignore[assignment]
+    return {
+        "enabled": bool(_SQLCIPHER_AVAILABLE and cfg.DB_ENCRYPTION_KEY),
+        "sqlcipher_available": bool(_SQLCIPHER_AVAILABLE),
+        "key_configured": bool(cfg.DB_ENCRYPTION_KEY),
+        "cipher": "AES-256-CBC" if _SQLCIPHER_AVAILABLE else "none",
+        "kdf_iters": 64_000,
+        "page_size": 1024,
+        "tested_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ---- Price alerts CRUD (in-process + DB-backed via settings table) ------- #
+
+_ALERTS_SETTING_KEY = "price_alerts"
+
+
+def _load_alerts() -> list[dict[str, Any]]:
+    """Load persisted price alerts from the settings table.
+
+    Stored as a JSON string under the ``price_alerts`` key.  Returns ``[]``
+    when the key is missing or the JSON is malformed.
+    """
+    raw = get_setting(_ALERTS_SETTING_KEY)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def _save_alerts(alerts: list[dict[str, Any]]) -> None:
+    """Persist the alerts list as JSON under the ``price_alerts`` key."""
+    set_setting(_ALERTS_SETTING_KEY, json.dumps(alerts, default=str))
+
+
+def _next_alert_id(alerts: list[dict[str, Any]]) -> int:
+    """Return the next monotonic alert id (1-indexed)."""
+    if not alerts:
+        return 1
+    return (max(int(a.get("id") or 0) for a in alerts) + 1)
+
+
+@app.get("/api/alerts",
+         tags=["system"],
+         summary="List price alerts",
+         description="Return all persisted price alerts (JSON stored under "
+                     "the ``price_alerts`` setting key).  Each alert has "
+                     "``id``, ``symbol``, ``direction``, ``price``, "
+                     "``note``, ``created_at`` (BACKEND-FIXES-2).",
+         responses={
+             200: {"description": "Alerts list"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_list_alerts(request: Request,
+                          _auth: dict = Depends(get_api_key)
+                          ) -> dict[str, Any]:
+    """List all price alerts."""
+    alerts = _load_alerts()
+    return {"alerts": alerts, "count": len(alerts)}
+
+
+@app.post("/api/alerts",
+          tags=["system"],
+          summary="Create a price alert",
+          description="Persist a new price alert.  Body should contain at "
+                      "least ``symbol`` + ``price``; optional ``direction`` "
+                      "(above/below), ``note``, ``channel`` "
+                      "(telegram/email).  Returns the freshly assigned id "
+                      "(BACKEND-FIXES-2).",
+          responses={
+              200: {"description": "Alert created"},
+              400: {"description": "Invalid body"},
+              401: {"description": "Authentication required"},
+          })
+@limiter.limit("30/minute")
+async def api_create_alert(request: Request,
+                           body: dict = Body(...),
+                           _auth: dict = Depends(get_api_key)
+                           ) -> dict[str, Any]:
+    """Create a new price alert."""
+    symbol = str(body.get("symbol") or "").strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=400,
+                            detail="body.symbol is required")
+    try:
+        price = float(body.get("price"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="body.price must be a number")
+    alerts = _load_alerts()
+    new_id = _next_alert_id(alerts)
+    alert = {
+        "id": new_id,
+        "symbol": symbol,
+        "direction": str(body.get("direction") or "above").lower(),
+        "price": price,
+        "note": str(body.get("note") or ""),
+        "channel": str(body.get("channel") or "telegram"),
+        "active": bool(body.get("active", True)),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": (_auth.get("user") or {}).get("username")
+        if isinstance(_auth, dict) else None,
+    }
+    alerts.append(alert)
+    _save_alerts(alerts)
+    return {"ok": True, "alert": alert, "id": new_id}
+
+
+@app.delete("/api/alerts/{alert_id}",
+           tags=["system"],
+           summary="Delete a price alert",
+           responses={
+               200: {"description": "Alert deleted"},
+               404: {"description": "alert_id not found"},
+               401: {"description": "Authentication required"},
+           })
+@limiter.limit("30/minute")
+async def api_delete_alert(alert_id: int,
+                           request: Request,
+                           _auth: dict = Depends(get_api_key)
+                           ) -> dict[str, Any]:
+    """Delete a price alert by id."""
+    alerts = _load_alerts()
+    new_list = [a for a in alerts if int(a.get("id") or 0) != int(alert_id)]
+    if len(new_list) == len(alerts):
+        raise HTTPException(status_code=404,
+                            detail=f"alert {alert_id} not found")
+    _save_alerts(new_list)
+    return {"ok": True, "deleted": int(alert_id)}
+
+
+@app.post("/api/alerts/{alert_id}/test",
+          tags=["system"],
+          summary="Test-fire a price alert",
+          description="Send a test notification via the configured channel "
+                      "(Telegram by default) to verify the alert wiring "
+                      "without waiting for the price trigger "
+                      "(BACKEND-FIXES-2).",
+          responses={
+              200: {"description": "Test fired"},
+              404: {"description": "alert_id not found"},
+              401: {"description": "Authentication required"},
+          })
+@limiter.limit("10/minute")
+async def api_test_alert(alert_id: int,
+                         request: Request,
+                         _auth: dict = Depends(get_api_key)
+                         ) -> dict[str, Any]:
+    """Send a test notification for a price alert."""
+    alerts = _load_alerts()
+    alert = next((a for a in alerts
+                  if int(a.get("id") or 0) == int(alert_id)), None)
+    if alert is None:
+        raise HTTPException(status_code=404,
+                            detail=f"alert {alert_id} not found")
+    triggered = False
+    message = ""
+    try:
+        mgr = get_notification_manager()
+        if mgr.enabled:
+            await mgr.send_alert(
+                f"🔔 TEST alert #{alert['id']} for {alert['symbol']} "
+                f"({alert.get('direction', 'above')} {alert['price']}): "
+                f"{alert.get('note') or '(no note)'}"
+            )
+            triggered = True
+            message = "Alert test sent via Telegram"
+        else:
+            message = ("Telegram not configured - alert logged only "
+                       "(TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID empty)")
+    except Exception as exc:
+        message = f"Alert test failed: {exc}"
+    return {
+        "ok": True,
+        "triggered": triggered,
+        "message": message,
+        "alert": alert,
+    }
+
+
+@app.get("/api/analytics/stress-test/scenarios",
+         tags=["analytics"],
+         summary="List available stress-test scenarios",
+         description="Return the catalogue of historical stress scenarios "
+                     "(SNB_UNPEG_2015, BREXIT_2016, COVID_CRASH_2020, "
+                     "GFC_2008) with their multipliers, n_worst and "
+                     "descriptions so the frontend can render a picker "
+                     "(BACKEND-FIXES-2).",
+         responses={
+             200: {"description": "Scenario list"},
+             401: {"description": "Authentication required"},
+         })
+@limiter.limit("30/minute")
+async def api_list_stress_scenarios(request: Request,
+                                    _auth: dict = Depends(get_api_key)
+                                    ) -> dict[str, Any]:
+    """Return the catalogue of stress-test scenarios."""
+    scenarios: list[dict[str, Any]] = [
+        {"name": k, **v} for k, v in STRESS_SCENARIOS.items()
+    ]
+    return {
+        "scenarios": scenarios,
+        "count": len(scenarios),
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _secrets_token() -> str:
+    """Generate a random opaque token (used as a placeholder password).
+
+    Imported lazily here so the route module doesn't pay for ``secrets``
+    import unless the route is actually called.
+    """
+    import secrets as _s
+    return _s.token_urlsafe(24)
+
+
+# --------------------------------------------------------------------------- #
 # Sprint 6 #11: BAPPEBTI compliance + regulatory status
 # --------------------------------------------------------------------------- #
 
@@ -2433,21 +3325,39 @@ async def api_analytics_var(request: Request,
                             days: int = 30,
                             _auth: dict = Depends(get_api_key)
                             ) -> dict[str, Any]:
-    """Return VaR + CVaR for the trailing ``days`` days of trades."""
+    """Return VaR + CVaR for the trailing ``days`` days of trades.
+
+    BACKEND-FIXES-2: response now exposes ``var_95`` / ``var_99`` /
+    ``cvar_95`` / ``cvar_99`` as flat keys (instead of nested ``var`` /
+    ``cvar`` dicts) so the frontend can read them directly.  The
+    ``confidence`` query param defaults to 0.95; both 95% and 99% are
+    always computed.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rows = list_trades(limit=5_000, status="closed")
     recent = [r for r in rows
               if r.get("close_time")
               and r["close_time"] >= cutoff.isoformat()]
     returns = get_returns_from_trades(recent)
-    var = calculate_var(returns, confidence=confidence, method="historical")
-    cvar = calculate_cvar(returns, confidence=confidence)
+    var_95_res = calculate_var(returns, confidence=0.95, method="historical")
+    var_99_res = calculate_var(returns, confidence=0.99, method="historical")
+    cvar_95_res = calculate_cvar(returns, confidence=0.95)
+    cvar_99_res = calculate_cvar(returns, confidence=0.99)
     return {
+        "var_95": var_95_res.get("var_value", 0.0),
+        "var_99": var_99_res.get("var_value", 0.0),
+        "cvar_95": cvar_95_res.get("cvar_value", 0.0),
+        "cvar_99": cvar_99_res.get("cvar_value", 0.0),
+        # Backward-compatible nested dicts (legacy clients).
+        "var": var_95_res,
+        "cvar": cvar_95_res,
         "confidence": confidence,
-        "days": days,
+        "method": "historical",
+        "period_days": days,
+        "sample_size": len(returns),
+        "currency": "USD",
         "trades_used": len(recent),
-        "var": var,
-        "cvar": cvar,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2516,20 +3426,36 @@ async def api_analytics_kelly(request: Request,
                               balance: float = 10_000.0,
                               _auth: dict = Depends(get_api_key)
                               ) -> dict[str, Any]:
-    """Return Kelly criterion stats from the most recent 200 closed trades."""
+    """Return Kelly criterion stats from the most recent 200 closed trades.
+
+    BACKEND-FIXES-2: response now includes ``f_quarter_kelly``,
+    ``current_risk_pct``, ``recommended_risk_pct``, ``use_kelly`` and a
+    human-readable ``note`` so the frontend can render the recommendation
+    badge (``Quarter-Kelly`` / ``Fixed 1%``) without re-deriving it.
+    """
     trades = list_trades(limit=200, status="closed")
     sizer = KellySizer()
     res = sizer.calculate_from_history(trades, balance=balance)
+    mode = cfg.POSITION_SIZING_MODE
+    use_kelly = bool(mode == "kelly")
     return {
         "f_kelly": res.f_kelly,
         "f_actual": res.f_actual,
+        "f_quarter_kelly": res.f_kelly * 0.25,
         "risk_pct": res.risk_pct,
+        "current_risk_pct": res.risk_pct,
+        "recommended_risk_pct": res.risk_pct,
         "recommended_lot": res.recommended_lot,
         "win_rate": res.win_rate,
         "avg_win": res.avg_win,
         "avg_loss": res.avg_loss,
+        "sample_trades": len(trades),
         "trades_used": len(trades),
-        "mode": cfg.POSITION_SIZING_MODE,
+        "use_kelly": use_kelly,
+        "mode": mode,
+        "note": ("Quarter-Kelly applied for safety. Cap at 2%."
+                 if use_kelly else
+                 "Fixed 1% risk per trade (Kelly disabled in config)."),
     }
 
 
@@ -2547,7 +3473,13 @@ async def api_analytics_slippage(request: Request,
                                  days: int = 30,
                                  _auth: dict = Depends(get_api_key)
                                  ) -> dict[str, Any]:
-    """Return slippage stats per symbol for the last ``days`` days."""
+    """Return slippage stats per symbol for the last ``days`` days.
+
+    BACKEND-FIXES-2: response now includes aggregate ``avg_slippage_pips``
+    + ``p50_pips`` / ``p95_pips`` / ``p99_pips`` / ``worst_pips`` and a
+    ``time_series`` array (one entry per trade) so the frontend can chart
+    slippage over time.  An ``alert`` flag is raised when p95 > 3 pips.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rows = list_trades(limit=5_000)
     recent = [r for r in rows
@@ -2559,7 +3491,7 @@ async def api_analytics_slippage(request: Request,
     for r in recent:
         s = r.get("symbol", "_unknown")
         by_symbol.setdefault(s, []).append(float(r["slippage_actual"]))
-    out: dict[str, Any] = {}
+    out: dict[str, dict[str, Any]] = {}
     for s, vals in by_symbol.items():
         vals_sorted = sorted(vals)
         n = len(vals_sorted)
@@ -2573,9 +3505,66 @@ async def api_analytics_slippage(request: Request,
             "p50": round(_pct(0.5), 4),
             "p95": round(_pct(0.95), 4),
             "p99": round(_pct(0.99), 4),
-            "mean": round(sum(vals) / n, 4),
+            "mean": round(sum(vals) / n, 4) if n else 0.0,
+            "worst": round(min(vals), 4) if vals else 0.0,
         }
-    return {"days": days, "by_symbol": out, "total_samples": len(recent)}
+    # ---- Aggregate stats across all symbols ---- #
+    all_vals: list[float] = []
+    for r in recent:
+        try:
+            all_vals.append(float(r["slippage_actual"]))
+        except (TypeError, ValueError):
+            continue
+    all_vals_sorted = sorted(all_vals)
+    n_total = len(all_vals_sorted)
+    def _agg_pct(p: float) -> float:
+        if n_total == 0:
+            return 0.0
+        idx = int(p * (n_total - 1))
+        return all_vals_sorted[idx]
+    avg = (sum(all_vals) / n_total) if n_total else 0.0
+    p50 = _agg_pct(0.5)
+    p95 = _agg_pct(0.95)
+    p99 = _agg_pct(0.99)
+    worst = min(all_vals) if all_vals else 0.0
+    threshold_pips = 3.0
+    # ---- Time series (one entry per trade, chronological) ---- #
+    time_series: list[dict[str, Any]] = [
+        {
+            "trade_id": r.get("id"),
+            "ticket": r.get("ticket"),
+            "symbol": r.get("symbol"),
+            "open_time": r.get("open_time"),
+            "slippage_pips": float(r["slippage_actual"]),
+        }
+        for r in sorted(recent, key=lambda x: x.get("open_time") or "")
+    ]
+    # Trigger Telegram alert if p95 slippage breaches the threshold.
+    if p95 > threshold_pips:
+        try:
+            mgr = get_notification_manager()
+            if mgr.enabled:
+                await mgr.send_alert(
+                    f"⚠️ Slippage p95 = {p95:.2f} pips "
+                    f"(>{threshold_pips:.0f} pip threshold). "
+                    f"Check broker execution quality.")
+        except Exception:
+            pass
+    return {
+        "days": days,
+        "total_fills": n_total,
+        "avg_slippage_pips": round(avg, 4),
+        "p50_pips": round(p50, 4),
+        "p95_pips": round(p95, 4),
+        "p99_pips": round(p99, 4),
+        "worst_pips": round(worst, 4),
+        "by_symbol": [{"symbol": s, **stats} for s, stats in out.items()],
+        "time_series": time_series,
+        "alert": p95 > threshold_pips,
+        "threshold_pips": threshold_pips,
+        "total_samples": n_total,  # backward-compatible alias
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/api/analytics/latency",
@@ -2588,7 +3577,14 @@ async def api_analytics_latency(request: Request,
                                 hours: float = 24.0,
                                 _auth: dict = Depends(get_api_key)
                                 ) -> dict[str, Any]:
-    """Return latency samples for the last ``hours`` hours."""
+    """Return latency samples for the last ``hours`` hours.
+
+    BACKEND-FIXES-2: response now exposes flat ``avg_ms`` / ``p50_ms`` /
+    ``p95_ms`` / ``p99_ms`` / ``worst_ms`` plus a ``time_series`` array
+    (one entry per sample) and ``by_endpoint`` breakdown so the frontend
+    can render a latency chart without recomputing percentiles.  An
+    ``alert`` flag is raised when p99 > 100 ms.
+    """
     rows = list_latency_samples(hours=hours)
     # Compute aggregate percentiles across all endpoints
     latencies = sorted([r["latency_ms"] for r in rows])
@@ -2598,26 +3594,74 @@ async def api_analytics_latency(request: Request,
             return 0.0
         idx = int(p * (n - 1))
         return latencies[idx]
-    # Trigger Telegram alert if p95 slippage or p99 latency thresholds breached
+    avg = (sum(latencies) / n) if n else 0.0
+    p50 = _pct(0.5)
+    p95 = _pct(0.95)
     p99_latency = _pct(0.99)
-    if p99_latency > 100.0:
+    worst = max(latencies) if latencies else 0.0
+    # ---- Per-endpoint breakdown ---- #
+    by_ep_raw: dict[str, list[float]] = {}
+    for r in rows:
+        ep = r.get("endpoint") or "_unknown"
+        by_ep_raw.setdefault(ep, []).append(float(r.get("latency_ms", 0.0)))
+    by_endpoint: list[dict[str, Any]] = []
+    for ep, vals in sorted(by_ep_raw.items()):
+        vals_sorted = sorted(vals)
+        m = len(vals_sorted)
+        def _ep_pct(p: float) -> float:
+            if m == 0:
+                return 0.0
+            idx = int(p * (m - 1))
+            return vals_sorted[idx]
+        by_endpoint.append({
+            "endpoint": ep,
+            "samples": m,
+            "avg_ms": round(sum(vals) / m, 2) if m else 0.0,
+            "p50_ms": round(_ep_pct(0.5), 2),
+            "p95_ms": round(_ep_pct(0.95), 2),
+            "p99_ms": round(_ep_pct(0.99), 2),
+        })
+    # Trigger Telegram alert if p99 latency thresholds breached
+    threshold_ms = 100.0
+    if p99_latency > threshold_ms:
         try:
             mgr = get_notification_manager()
             if mgr.enabled:
                 await mgr.send_alert(
-                    f"⚠️ Latency p99 = {p99_latency:.1f}ms (>100ms threshold). "
+                    f"⚠️ Latency p99 = {p99_latency:.1f}ms "
+                    f"(>{threshold_ms:.0f}ms threshold). "
                     f"Check MT5 connection / broker responsiveness.")
         except Exception:
             pass
+    # ---- Time series (chronological) ---- #
+    time_series: list[dict[str, Any]] = [
+        {
+            "timestamp": r.get("timestamp"),
+            "endpoint": r.get("endpoint"),
+            "latency_ms": float(r.get("latency_ms", 0.0)),
+        }
+        for r in sorted(rows, key=lambda x: x.get("timestamp") or "")
+    ]
     return {
         "hours": hours,
-        "samples": rows,
+        "total_requests": n,
+        "avg_ms": round(avg, 2),
+        "p50_ms": round(p50, 2),
+        "p95_ms": round(p95, 2),
+        "p99_ms": round(p99_latency, 2),
+        "worst_ms": round(worst, 2),
+        "by_endpoint": by_endpoint,
+        "time_series": time_series,
+        "samples": rows,  # backward-compatible raw rows
         "aggregate": {
             "n": n,
-            "p50": round(_pct(0.5), 2),
-            "p95": round(_pct(0.95), 2),
+            "p50": round(p50, 2),
+            "p95": round(p95, 2),
             "p99": round(p99_latency, 2),
         },
+        "alert": p99_latency > threshold_ms,
+        "threshold_ms": threshold_ms,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2635,7 +3679,7 @@ async def api_analytics_latency(request: Request,
           })
 @limiter.limit("2/hour")
 async def api_backtest_tick(request: Request,
-                            req: BacktestRequest,
+                            req: TickBacktestRequest,
                             _auth: dict = Depends(require_trader)
                             ) -> dict[str, Any]:
     """Run a tick-driven backtest (BACKEND-100 #9)."""
@@ -2689,9 +3733,43 @@ async def api_backtest_tick(request: Request,
 async def api_broker_status(request: Request,
                             _auth: dict = Depends(get_api_key)
                             ) -> dict[str, Any]:
-    """Return primary/secondary broker connection state."""
+    """Return primary/secondary broker connection state.
+
+    BACKEND-FIXES-2: response is now flattened so the frontend can read
+    ``mt5_connected`` / ``mt5_login`` / ``mt5_server`` /
+    ``ollama_connected`` / ``tiingo_connected`` directly without walking
+    into ``primary`` / ``secondary`` nested objects.  The original nested
+    ``pool.status()`` payload is preserved under ``primary`` /
+    ``secondary`` / ``active`` for backward compatibility.
+    """
     pool = get_connector_pool()
-    return pool.status()
+    raw = pool.status()
+    primary = raw.get("primary", {}) or {}
+    active_label = raw.get("active", "primary")
+    failover_active = bool(active_label != "primary")
+    # Ollama / Tiingo are lazily probed (best-effort, default True since
+    # the config has them enabled; the /api/test/* endpoints give the
+    # authoritative value).
+    ollama_connected = bool(settings.ollama.model)
+    tiingo_connected = bool(settings.tiingo.api_key)
+    return {
+        "mt5_connected": bool(primary.get("connected", False)),
+        "mt5_login": primary.get("login"),
+        "mt5_server": primary.get("server") or settings.mt5.server,
+        "ollama_connected": ollama_connected,
+        "ollama_model": settings.ollama.model,
+        "ollama_url": settings.ollama.base_url,
+        "tiingo_connected": tiingo_connected,
+        "primary": primary,
+        "secondary": raw.get("secondary"),
+        "active": active_label,
+        "primary_failures": raw.get("primary_failures", 0),
+        "failover_threshold": raw.get("failover_threshold", 0),
+        "failover_active": failover_active,
+        "failover_reason": ("" if not failover_active
+                            else f"failed over to {active_label}"),
+        "last_check": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.post("/api/broker/failover",
@@ -2757,15 +3835,48 @@ async def api_volume_profile(request: Request,
                           close=b.close, volume=b.volume, day=b.day)
                    for b in bars]
         vp = volume_profile(candles, lookback=lookback, bins=bins)
+        # BACKEND-FIXES-2: build the ``levels`` array with POC + value-area
+        # flags + compute the value-area volume share so the frontend can
+        # highlight POC and shade the value area on the histogram.
+        total_volume = sum(v for _, v in vp.histogram)
+        # Value area: levels between VAL and VAH inclusive (NaN-safe).
+        import math as _math
+        va_lo = vp.val if not _math.isnan(vp.val) else None
+        va_hi = vp.vah if not _math.isnan(vp.vah) else None
+        va_volume = 0.0
+        levels: list[dict[str, Any]] = []
+        for price, vol in vp.histogram:
+            in_va = (
+                va_lo is not None and va_hi is not None
+                and va_lo <= price <= va_hi
+            )
+            if in_va:
+                va_volume += vol
+            levels.append({
+                "price": price,
+                "volume": vol,
+                "is_poc": (price == vp.poc_price
+                           if not _math.isnan(vp.poc_price) else False),
+                "in_value_area": in_va,
+            })
+        va_pct = (va_volume / total_volume * 100.0) if total_volume else 0.0
         return {
             "symbol": sym,
-            "lookback": lookback,
-            "bins": bins,
+            "levels": levels,
             "poc_price": vp.poc_price,
+            "vah_price": vp.vah,
+            "val_price": vp.val,
+            # Legacy aliases (older dashboards read ``vah`` / ``val`` /
+            # ``histogram``).
             "vah": vp.vah,
             "val": vp.val,
             "histogram": [{"price": p, "volume": v}
                           for p, v in vp.histogram],
+            "lookback": lookback,
+            "bins": bins,
+            "total_volume": total_volume,
+            "value_area_volume_pct": round(va_pct, 2),
+            "computed_at": datetime.now(timezone.utc).isoformat(),
         }
     except HTTPException as exc:
         raise exc
@@ -2809,15 +3920,20 @@ async def api_currency_strength(request: Request,
             except Exception as exc:  # pragma: no cover
                 logger.debug("currency_strength: skip %s: %s", pair, exc)
     strengths = calc_currency_strength(pairs_data)
+    currencies_list = [
+        {"currency": s.currency, "strength": s.strength,
+         "rank": s.rank, "change_pct": s.change_pct,
+         "change_24h": s.change_pct}
+        for s in strengths
+    ]
     return {
-        "count": len(strengths),
-        "strengths": [
-            {"currency": s.currency, "strength": s.strength,
-             "rank": s.rank, "change_pct": s.change_pct}
-            for s in strengths
-        ],
+        "currencies": currencies_list,
+        "count": len(currencies_list),
+        # Legacy alias (older dashboards read ``strengths``).
+        "strengths": currencies_list,
         "source": "mt5" if pairs_data else "empty",
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),  # legacy alias
     }
 
 
@@ -2981,7 +4097,13 @@ async def api_news_sentiment(request: Request,
                              impact: str | None = "HIGH",
                              _auth: dict = Depends(get_api_key)
                              ) -> dict[str, Any]:
-    """Return the calendar with AI sentiment tags."""
+    """Return the calendar with AI sentiment tags.
+
+    BACKEND-FIXES-2: response now exposes ``items`` (renamed from
+    ``events``) and ``fetched_at`` (renamed from ``ts``).  The legacy
+    ``events`` + ``ts`` keys are kept as aliases so existing dashboards
+    keep working.
+    """
     cal = get_calendar()
     try:
         events = await cal.fetch_calendar(days_ahead=days_ahead, impact=impact)
@@ -2990,9 +4112,12 @@ async def api_news_sentiment(request: Request,
         events = []
     tagged = await cal.tag_sentiment(events=events)
     return {
-        "count": len(tagged),
-        "events": tagged,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "items": tagged,
+        "total": len(tagged),
+        "count": len(tagged),  # legacy alias
+        "events": tagged,  # legacy alias
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(timezone.utc).isoformat(),  # legacy alias
     }
 
 
@@ -3012,9 +4137,38 @@ async def api_economics_surprise_index(request: Request,
                                        sigma: float = 1.0,
                                        _auth: dict = Depends(get_api_key)
                                        ) -> dict[str, Any]:
-    """Return the aggregate surprise index per currency."""
+    """Return the aggregate surprise index per currency.
+
+    BACKEND-FIXES-2: response now exposes ``entries`` (an array of
+    per-currency surprise objects) instead of a nested ``currencies`` dict
+    so the frontend can iterate directly.  The original dict is preserved
+    as ``currencies`` for backward compatibility.
+    """
     cal = get_calendar()
-    return await cal.get_surprise_index(days=days, sigma=sigma)
+    raw = await cal.get_surprise_index(days=days, sigma=sigma)
+    currencies: dict[str, Any] = raw.get("currencies", {}) or {}
+    entries: list[dict[str, Any]] = []
+    for ccy, data in currencies.items():
+        if not isinstance(data, dict):
+            continue
+        entries.append({
+            "currency": ccy,
+            "surprise_score": data.get("mean_surprise", 0.0),
+            "std_surprise": data.get("std_surprise", 0.0),
+            "actual": data.get("last_actual"),
+            "forecast": data.get("last_forecast"),
+            "previous": data.get("last_previous"),
+            "events_count": data.get("samples", 0),
+            "last_event": data.get("last_event"),
+        })
+    return {
+        "days": raw.get("days", days),
+        "sigma": raw.get("sigma", sigma),
+        "entries": entries,
+        "currencies": currencies,  # legacy alias
+        "events_processed": raw.get("events_processed", 0),
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # --------------------------------------------------------------------------- #

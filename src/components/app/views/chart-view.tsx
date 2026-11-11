@@ -113,18 +113,24 @@ export function ChartView() {
 
   const chartRows = useMemo(() => {
     if (!chartData) return [];
-    return chartData.candles.map((c) => ({
+    const ind = chartData.indicators;
+    const ema9Arr = Array.isArray(ind?.ema9) ? ind.ema9 : [];
+    const ema21Arr = Array.isArray(ind?.ema21) ? ind.ema21 : [];
+    const vwapArr = Array.isArray(ind?.vwap) ? ind.vwap : [];
+    const bbUpperArr = Array.isArray(ind?.bbUpper) ? ind.bbUpper : [];
+    const bbLowerArr = Array.isArray(ind?.bbLower) ? ind.bbLower : [];
+    return chartData.candles.map((c, i) => ({
       time: new Date(c.time).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' }),
       open: c.open,
       high: c.high,
       low: c.low,
       close: c.close,
       volume: c.volume,
-      ema9: chartData.indicators.ema9[chartData.candles.indexOf(c)],
-      ema21: chartData.indicators.ema21[chartData.candles.indexOf(c)],
-      vwap: chartData.indicators.vwap[chartData.candles.indexOf(c)],
-      bbUpper: chartData.indicators.bbUpper[chartData.candles.indexOf(c)],
-      bbLower: chartData.indicators.bbLower[chartData.candles.indexOf(c)],
+      ema9: ema9Arr[i],
+      ema21: ema21Arr[i],
+      vwap: vwapArr[i],
+      bbUpper: bbUpperArr[i],
+      bbLower: bbLowerArr[i],
       isBull: c.close >= c.open,
     }));
   }, [chartData]);
@@ -132,10 +138,14 @@ export function ChartView() {
   const indicatorRows = useMemo(() => {
     if (!chartData) return { adx: [], rsi: [], atr: [] };
     const fmtTime = (t: string) => new Date(t).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' });
+    const ind = chartData.indicators;
+    const adxArr = Array.isArray(ind?.adx) ? ind.adx : [];
+    const rsiArr = Array.isArray(ind?.rsi) ? ind.rsi : [];
+    const atrArr = Array.isArray(ind?.atr) ? ind.atr : [];
     return {
-      adx: chartData.candles.map((c, i) => ({ time: fmtTime(c.time), adx: chartData.indicators.adx[i] })),
-      rsi: chartData.candles.map((c, i) => ({ time: fmtTime(c.time), rsi: chartData.indicators.rsi[i] })),
-      atr: chartData.candles.map((c, i) => ({ time: fmtTime(c.time), atr: chartData.indicators.atr[i] })),
+      adx: chartData.candles.map((c, i) => ({ time: fmtTime(c.time), adx: adxArr[i] })),
+      rsi: chartData.candles.map((c, i) => ({ time: fmtTime(c.time), rsi: rsiArr[i] })),
+      atr: chartData.candles.map((c, i) => ({ time: fmtTime(c.time), atr: atrArr[i] })),
     };
   }, [chartData]);
 

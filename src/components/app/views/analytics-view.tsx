@@ -122,18 +122,20 @@ export function AnalyticsView() {
     );
   }
 
-  const slippageChartData =
-    slippage?.time_series.map((p) => ({
-      time: fmtTime(p.timestamp),
-      avg: p.avg_pips,
-      p95: p.p95_pips,
-    })) ?? [];
-  const latencyChartData =
-    latency?.time_series.map((p) => ({
-      time: fmtTime(p.timestamp),
-      avg: p.avg_ms,
-      p95: p.p95_ms,
-    })) ?? [];
+  const slippageChartData = Array.isArray(slippage?.time_series)
+    ? slippage!.time_series.map((p) => ({
+        time: fmtTime(p.timestamp),
+        avg: p.avg_pips,
+        p95: p.p95_pips,
+      }))
+    : [];
+  const latencyChartData = Array.isArray(latency?.time_series)
+    ? latency!.time_series.map((p) => ({
+        time: fmtTime(p.timestamp),
+        avg: p.avg_ms,
+        p95: p.p95_ms,
+      }))
+    : [];
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -187,25 +189,25 @@ export function AnalyticsView() {
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <StatCard
           label="Avg Slippage"
-          value={slippage?.avg_slippage_pips.toFixed(2) ?? '—'}
+          value={slippage ? `${(slippage.avg_slippage_pips ?? 0).toFixed(2)}` : '—'}
           unit="pip"
           icon={TrendingDown}
-          variant={slippage && slippage.avg_slippage_pips > 1 ? 'bear' : 'default'}
+          variant={slippage && (slippage.avg_slippage_pips ?? 0) > 1 ? 'bear' : 'default'}
         />
-        <StatCard label="p50" value={slippage?.p50_pips.toFixed(2) ?? '—'} unit="pip" />
+        <StatCard label="p50" value={slippage ? `${(slippage.p50_pips ?? 0).toFixed(2)}` : '—'} unit="pip" />
         <StatCard
           label="p95"
-          value={slippage?.p95_pips.toFixed(2) ?? '—'}
+          value={slippage ? `${(slippage.p95_pips ?? 0).toFixed(2)}` : '—'}
           unit="pip"
           variant={slippage && slippage.alert ? 'bear' : 'warn'}
         />
         <StatCard
           label="p99"
-          value={slippage?.p99_pips.toFixed(2) ?? '—'}
+          value={slippage ? `${(slippage.p99_pips ?? 0).toFixed(2)}` : '—'}
           unit="pip"
           variant="bear"
         />
-        <StatCard label="Worst" value={slippage?.worst_pips.toFixed(2) ?? '—'} unit="pip" variant="bear" />
+        <StatCard label="Worst" value={slippage ? `${(slippage.worst_pips ?? 0).toFixed(2)}` : '—'} unit="pip" variant="bear" />
       </div>
 
       {/* Slippage alert + chart */}
@@ -261,8 +263,8 @@ export function AnalyticsView() {
           <AlertTriangle className="h-4 w-4 text-bear shrink-0 mt-0.5" />
           <div>
             <strong className="text-bear">SLIPPAGE ALERT:</strong> p95 slippage{' '}
-            {slippage.p95_pips.toFixed(2)} pip melebihi threshold{' '}
-            {slippage.threshold_pips} pip. Pertimbangkan: (1) broker ECN dengan spread tighter,
+            {(slippage.p95_pips ?? 0).toFixed(2)} pip melebihi threshold{' '}
+            {slippage.threshold_pips ?? '—'} pip. Pertimbangkan: (1) broker ECN dengan spread tighter,
             (2) limit order instead of market, (3) avoid trading di sepi jam.
           </div>
         </div>
@@ -325,8 +327,8 @@ export function AnalyticsView() {
                 formatter={(v: number, n) => [`${Number(v).toFixed(0)} ms`, n === 'avg_ms' ? 'Avg' : 'p95']}
               />
               <Bar dataKey="avg_ms" name="avg_ms" fill="var(--info)" radius={[0, 3, 3, 0]}>
-                {latency?.by_endpoint.map((entry, i) => (
-                  <Cell key={i} fill={entry.p95_ms > 100 ? 'var(--bear)' : 'var(--info)'} />
+                {(latency?.by_endpoint ?? []).map((entry, i) => (
+                  <Cell key={i} fill={(entry.p95_ms ?? 0) > 100 ? 'var(--bear)' : 'var(--info)'} />
                 ))}
               </Bar>
             </BarChart>
@@ -339,7 +341,7 @@ export function AnalyticsView() {
           <AlertTriangle className="h-4 w-4 text-warn shrink-0 mt-0.5" />
           <div>
             <strong className="text-warn">LATENCY WARNING:</strong> p99 latency{' '}
-            {latency.p99_ms}ms melebihi threshold {latency.threshold_ms}ms. Untuk scalping
+            {latency.p99_ms ?? '—'}ms melebihi threshold {latency.threshold_ms ?? '—'}ms. Untuk scalping
             M5 ini acceptable tapi bila &gt; 500ms pertimbangkan: (1) backend closer to broker,
             (2) reduce chart polling interval, (3) upgrade Ollama hardware.
           </div>
@@ -355,32 +357,32 @@ export function AnalyticsView() {
         <div className="pt-3 grid grid-cols-1 xl:grid-cols-3 gap-4">
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
-              <StatCard label="Win Rate" value={kelly ? (kelly.win_rate * 100).toFixed(1) : '—'} unit="%" variant="bull" />
+              <StatCard label="Win Rate" value={kelly ? `${((kelly.win_rate ?? 0) * 100).toFixed(1)}` : '—'} unit="%" variant="bull" />
               <StatCard label="Sample" value={kelly?.sample_trades ?? '—'} unit="trades" />
-              <StatCard label="Avg Win" value={kelly?.avg_win.toFixed(2) ?? '—'} unit="USD" variant="bull" />
-              <StatCard label="Avg Loss" value={kelly?.avg_loss.toFixed(2) ?? '—'} unit="USD" variant="bear" />
+              <StatCard label="Avg Win" value={kelly ? `${(kelly.avg_win ?? 0).toFixed(2)}` : '—'} unit="USD" variant="bull" />
+              <StatCard label="Avg Loss" value={kelly ? `${(kelly.avg_loss ?? 0).toFixed(2)}` : '—'} unit="USD" variant="bear" />
             </div>
             <div className="rounded-md border p-3 space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Full Kelly (f*)</span>
                 <span className={cn('font-mono tabular-nums font-semibold', (kelly?.f_kelly ?? 0) > 0.25 ? 'text-bear' : 'text-info')}>
-                  {kelly ? `${(kelly.f_kelly * 100).toFixed(2)}%` : '—'}
+                  {kelly ? `${((kelly.f_kelly ?? 0) * 100).toFixed(2)}%` : '—'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Quarter-Kelly</span>
                 <span className="font-mono tabular-nums font-semibold text-bull">
-                  {kelly ? `${(kelly.f_quarter_kelly * 100).toFixed(2)}%` : '—'}
+                  {kelly ? `${((kelly.f_quarter_kelly ?? 0) * 100).toFixed(2)}%` : '—'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Current Risk</span>
-                <span className="font-mono tabular-nums">{kelly ? `${(kelly.current_risk_pct * 100).toFixed(2)}%` : '—'}</span>
+                <span className="font-mono tabular-nums">{kelly ? `${((kelly.current_risk_pct ?? 0) * 100).toFixed(2)}%` : '—'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Recommended</span>
                 <span className="font-mono tabular-nums font-semibold text-bull">
-                  {kelly ? `${(kelly.recommended_risk_pct * 100).toFixed(2)}%` : '—'}
+                  {kelly ? `${((kelly.recommended_risk_pct ?? 0) * 100).toFixed(2)}%` : '—'}
                 </span>
               </div>
             </div>

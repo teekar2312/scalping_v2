@@ -158,18 +158,18 @@ export function SystemHealthView() {
         />
         <StatCard
           label="CPU Usage"
-          value={info ? `${info.cpu_percent.toFixed(1)}%` : '—'}
+          value={info ? `${(info.cpu_percent ?? 0).toFixed(1)}%` : '—'}
           unit=""
           icon={Cpu}
-          variant={info && info.cpu_percent > 80 ? 'bear' : info && info.cpu_percent > 60 ? 'warn' : 'default'}
+          variant={info && (info.cpu_percent ?? 0) > 80 ? 'bear' : info && (info.cpu_percent ?? 0) > 60 ? 'warn' : 'default'}
           trendValue={info ? `${info.cpu_count} cores` : ''}
         />
         <StatCard
           label="Memory Usage"
-          value={info ? `${info.memory_percent.toFixed(1)}%` : '—'}
+          value={info ? `${(info.memory_percent ?? 0).toFixed(1)}%` : '—'}
           unit=""
           icon={MemoryStick}
-          variant={info && info.memory_percent > 85 ? 'bear' : info && info.memory_percent > 70 ? 'warn' : 'default'}
+          variant={info && (info.memory_percent ?? 0) > 85 ? 'bear' : info && (info.memory_percent ?? 0) > 70 ? 'warn' : 'default'}
           trendValue={info ? `${formatBytes(info.memory_used_bytes)} / ${formatBytes(info.memory_total_bytes)}` : ''}
         />
       </div>
@@ -198,7 +198,7 @@ export function SystemHealthView() {
               <InfoRow label="OS" value={info.os} />
               <InfoRow label="Python" value={info.python_version} mono />
               <InfoRow label="CPU Count" value={`${info.cpu_count} cores`} mono />
-              <InfoRow label="CPU Usage" value={`${info.cpu_percent.toFixed(1)}%`} mono />
+              <InfoRow label="CPU Usage" value={`${(info.cpu_percent ?? 0).toFixed(1)}%`} mono />
               <InfoRow label="Process ID" value={String(info.process_id)} mono />
               <InfoRow
                 label="Memory"
@@ -211,7 +211,7 @@ export function SystemHealthView() {
                 mono
               />
               <InfoRow label="Uptime" value={formatUptime(info.uptime_seconds)} mono />
-              <InfoRow label="Boot Time" value={new Date(info.boot_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} />
+              <InfoRow label="Boot Time" value={info.boot_time ? new Date(info.boot_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }) : '—'} />
               <InfoRow label="Active DB Conns" value={String(info.active_db_connections)} mono />
             </>
           )}
@@ -246,7 +246,7 @@ export function SystemHealthView() {
           <div className="pt-3">
             <div className="mb-2 flex items-baseline justify-between">
               <span className="text-2xl font-bold tabular-nums">
-                {info ? `${info.cpu_percent.toFixed(1)}%` : '—'}
+                {info ? `${(info.cpu_percent ?? 0).toFixed(1)}%` : '—'}
               </span>
               <span className="text-xs text-muted-foreground">
                 {info ? `${info.cpu_count} cores` : ''}
@@ -274,7 +274,7 @@ export function SystemHealthView() {
         icon={Activity}
       >
         <div className="pt-3">
-          {services && services.services.length > 0 ? (
+          {services && Array.isArray(services.services) && services.services.length > 0 ? (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -460,29 +460,29 @@ export function SystemHealthView() {
                     <div
                       className={cn(
                         'text-lg font-bold tabular-nums',
-                        Math.abs(drawdown.current_drawdown_pct) > 2 ? 'text-bear' : 'text-foreground'
+                        Math.abs(drawdown.current_drawdown_pct ?? 0) > 2 ? 'text-bear' : 'text-foreground'
                       )}
                     >
-                      {drawdown.current_drawdown_pct.toFixed(2)}%
+                      {(drawdown.current_drawdown_pct ?? 0).toFixed(2)}%
                     </div>
                   </div>
                   <div className="rounded-md border p-2">
                     <div className="text-[10px] text-muted-foreground uppercase">Max DD 24h</div>
                     <div className="text-lg font-bold tabular-nums text-warn">
-                      {drawdown.max_drawdown_pct_24h.toFixed(2)}%
+                      {(drawdown.max_drawdown_pct_24h ?? 0).toFixed(2)}%
                     </div>
                   </div>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Peak Equity</span>
                   <span className="font-mono tabular-nums">
-                    ${drawdown.peak_equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ${(drawdown.peak_equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Current Equity</span>
                   <span className="font-mono tabular-nums">
-                    ${drawdown.current_equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ${(drawdown.current_equity ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
