@@ -579,13 +579,16 @@ function DashboardViewInner() {
     );
   }
 
-  const account = status.account!;
-  const dailyRisk = status.dailyRisk!;
-  const bot = status.bot;
+  const account = status.account ?? { login: 0, server: '—', broker: '—', currency: 'USD', leverage: 100, balance: 0, equity: 0, margin: 0, marginFree: 0, marginLevel: 0, profit: 0, lastSync: '' };
+  const dailyRisk = status.dailyRisk ?? { date: '', startingBalance: 0, currentBalance: 0, dailyPnl: 0, dailyPnlPct: 0, tradesCount: 0, winsCount: 0, lossesCount: 0, softStopHit: false, hardStopHit: false, botLocked: false, lockReason: null };
+  const bot = status.bot ?? { status: 'STOPPED', autoTrade: false, killSwitch: false, mt5Connected: false, ollamaConnected: false, tiingoConnected: false, totalTrades: 0, totalWins: 0, totalLosses: 0, uptimeSec: 0, lastStartedAt: null, lastStoppedAt: null };
   const todayHighNews = news.filter((n) => n.impact === 'HIGH').slice(0, 4);
   const activeSignals = signals.filter((s) => s.status === 'ACTIVE').slice(0, 5);
-  const dailyPnlPct = dailyRisk.dailyPnlPct * 100;
-  const weeklyPnlPct = status.weeklyPnlPct * 100;
+  const dailyPnlPct = (dailyRisk?.dailyPnlPct ?? 0) * 100;
+  const weeklyPnlPct = (status.weeklyPnlPct ?? 0) * 100;
+  const overallPnlPct = status.overallPnlPct ?? 0;
+  const openPositionsCount = status.openPositionsCount ?? trades.length;
+  const todayTradesCount = status.todayTradesCount ?? dailyRisk?.tradesCount ?? 0;
 
   // Risk tier progress (negative = loss)
   const softStopPct = Math.abs(V2_RULES.TIERED_STOPS.SOFT_DAILY * 100);
@@ -637,7 +640,7 @@ function DashboardViewInner() {
               unit="%"
               icon={Activity}
               trend={weeklyPnlPct >= 0 ? 'up' : 'down'}
-              trendValue={`Overall ${(status.overallPnlPct * 100).toFixed(1)}%`}
+              trendValue={`Overall ${(overallPnlPct * 100).toFixed(1)}%`}
               variant={weeklyPnlPct >= 0 ? 'bull' : 'bear'}
             />
           </div>
@@ -666,9 +669,9 @@ function DashboardViewInner() {
             actions={<BotControl status={bot.status} onStatusChange={(s: BotStatus) => setStatus({ ...status, bot: { ...bot, status: s } })} />}
           >
             <div className="flex flex-col gap-3 pt-3">
-              <StatusDot status={status.mt5Available ? 'ok' : 'error'} label="MT5 Connection" value={account.server} />
-              <StatusDot status={status.ollamaAvailable ? 'ok' : 'error'} label="Ollama AI" value="llama3.2:latest" />
-              <StatusDot status={status.tiingoAvailable ? 'ok' : 'error'} label="Tiingo Calendar" value="Connected" />
+              <StatusDot status={(status.mt5Available ?? bot.mt5Connected) ? 'ok' : 'error'} label="MT5 Connection" value={account.server} />
+              <StatusDot status={(status.ollamaAvailable ?? bot.ollamaConnected) ? 'ok' : 'error'} label="Ollama AI" value="llama3.2:latest" />
+              <StatusDot status={(status.tiingoAvailable ?? bot.tiingoConnected) ? 'ok' : 'error'} label="Tiingo Calendar" value="Connected" />
               <div className="my-2 border-t" />
               <div className="grid grid-cols-2 gap-3 text-xs">
                 <div>
@@ -725,8 +728,8 @@ function DashboardViewInner() {
               <RiskRow
                 label="Overall Drawdown"
                 limit="-10%"
-                status={status.overallPnlPct * 100 <= -10 ? 'HIT' : 'OK'}
-                current={`${(status.overallPnlPct * 100).toFixed(2)}%`}
+                status={overallPnlPct * 100 <= -10 ? 'HIT' : 'OK'}
+                current={`${(overallPnlPct * 100).toFixed(2)}%`}
               />
               <div className="my-1 border-t" />
               <div className="text-xs">
@@ -744,12 +747,12 @@ function DashboardViewInner() {
               <div className="mt-2 flex items-center gap-3 text-xs">
                 <span className="text-muted-foreground">Positions:</span>
                 <Badge variant="outline" className="tabular-nums">
-                  {status.openPositionsCount}/{V2_RULES.MAX_POSITIONS}
+                  {openPositionsCount}/{V2_RULES.MAX_POSITIONS}
                 </Badge>
                 <span className="text-muted-foreground">·</span>
                 <span className="text-muted-foreground">Today Trades:</span>
                 <Badge variant="outline" className="tabular-nums">
-                  {status.todayTradesCount}/{V2_RULES.MAX_DAILY_TRADES}
+                  {todayTradesCount}/{V2_RULES.MAX_DAILY_TRADES}
                 </Badge>
               </div>
             </div>
