@@ -3328,7 +3328,7 @@ async def api_list_stress_scenarios(request: Request,
                                     ) -> dict[str, Any]:
     """Return the catalogue of stress-test scenarios."""
     scenarios: list[dict[str, Any]] = [
-        {"name": k, **v} for k, v in STRESS_SCENARIOS.items()
+        {"id": k, "name": k, **v} for k, v in STRESS_SCENARIOS.items()
     ]
     return {
         "scenarios": scenarios,

@@ -127,7 +127,7 @@ export function StressTestView() {
           const isSelected = selected === s.id;
           return (
             <div
-              key={s.id}
+              key={s.id ?? s.name}
               className={cn(
                 'rounded-md border p-3 transition-colors cursor-pointer',
                 isSelected ? 'border-primary bg-accent' : 'hover:bg-accent/30',
@@ -270,7 +270,7 @@ export function StressTestView() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {allResults.map((r) => (
             <StatCard
-              key={r.id}
+              key={r.id ?? r.scenario_name}
               label={r.scenario_name.split('(')[0].trim()}
               value={r.stressed_max_dd_pct.toFixed(2)}
               unit="% DD"
