@@ -2419,17 +2419,74 @@ async def api_chart(request: Request,
         candles = [Candle(time=b.time, open=b.open, high=b.high, low=b.low,
                           close=b.close, volume=b.volume, day=b.day)
                    for b in bars]
+        # Handle empty candles gracefully
+        if not candles:
+            return {
+                "symbol": symbol,
+                "mt5_symbol": mt5_sym,
+                "timeframe": timeframe,
+                "count": 0,
+                "candles": [],
+                "indicators": {
+                    "ema9": [], "ema21": [], "vwap": 0, "atr": 0,
+                    "atr_pips": None,
+                    "adx": {"adx": 0, "plus_di": 0, "minus_di": 0},
+                    "rsi": 50,
+                    "bollinger": {"upper": 0, "middle": 0, "lower": 0},
+                    "pattern": None,
+                },
+                "mt5_connected": True,
+                "error": "No candles returned from MT5",
+            }
         closes = [c.close for c in candles]
         highs = [c.high for c in candles]
         lows = [c.low for c in candles]
-        ema9_series = ema_series(closes, 9)
-        ema21_series = ema_series(closes, 21)
-        vwap_val = vwap(candles)
-        atr_val = atr(highs, lows, closes, period=14)
-        adx_result = adx(highs, lows, closes, period=14)
-        rsi_val = rsi(closes, period=14)
-        bb = bollinger_bands(closes, period=20, std=2.0)
-        pattern = candle_pattern_detection(candles) if candles else None
+        # Wrap each indicator in try/except for robustness
+        try:
+            ema9_series = ema_series(closes, 9)
+        except Exception:
+            ema9_series = [closes[-1]] * len(closes) if closes else []
+        try:
+            ema21_series = ema_series(closes, 21)
+        except Exception:
+            ema21_series = [closes[-1]] * len(closes) if closes else []
+        try:
+            vwap_val = vwap(candles)
+        except Exception:
+            vwap_val = closes[-1] if closes else 0
+        try:
+            atr_val = atr(highs, lows, closes, period=14)
+        except Exception:
+            atr_val = 0
+        try:
+            adx_result = adx(highs, lows, closes, period=14)
+        except Exception:
+            from collections import namedtuple
+            ADXFallback = namedtuple("ADXFallback", ["adx", "plus_di", "minus_di"])
+            adx_result = ADXFallback(adx=0, plus_di=0, minus_di=0)
+        try:
+            rsi_val = rsi(closes, period=14)
+        except Exception:
+            rsi_val = 50
+        try:
+            bb = bollinger_bands(closes, period=20, std=2.0)
+        except Exception:
+            from collections import namedtuple
+            BBFallback = namedtuple("BBFallback", ["upper", "middle", "lower"])
+            bb = BBFallback(upper=closes[-1], middle=closes[-1], lower=closes[-1])
+        try:
+            pattern = candle_pattern_detection(candles) if candles else None
+        except Exception:
+            pattern = None
+        # Pip size for ATR pips conversion
+        atr_pips = None
+        try:
+            if MT5_AVAILABLE and get_connector().connected:
+                si = get_connector().get_symbol_info(mt5_sym)
+                if si and si.pip_size:
+                    atr_pips = atr_val / si.pip_size
+        except Exception:
+            atr_pips = None
         return {
             "symbol": symbol,
             "mt5_symbol": mt5_sym,
@@ -2441,10 +2498,7 @@ async def api_chart(request: Request,
                 "ema21": ema21_series,
                 "vwap": vwap_val,
                 "atr": atr_val,
-                "atr_pips": (atr_val / (get_connector()
-                            .get_symbol_info(mt5_sym).pip_size)
-                            if MT5_AVAILABLE and get_connector().connected
-                            else None),
+                "atr_pips": atr_pips,
                 "adx": {"adx": adx_result.adx,
                         "plus_di": adx_result.plus_di,
                         "minus_di": adx_result.minus_di},
@@ -2460,6 +2514,7 @@ async def api_chart(request: Request,
     except HTTPException as exc:
         raise exc
     except Exception as exc:
+        logger.error("Chart endpoint failed for %s: %s", symbol, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
