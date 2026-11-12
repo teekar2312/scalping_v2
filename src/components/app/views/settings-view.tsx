@@ -721,7 +721,7 @@ export function SettingsView() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Last checked</span>
                     <span className="font-mono tabular-nums text-[10px]">
-                      {new Date(bappebti.last_checked).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+                      {new Date(bappebti?.last_checked).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
                     </span>
                   </div>
                   {bappebti.warnings.length > 0 && (
@@ -967,7 +967,7 @@ export function SettingsView() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Last tested</span>
                   <span className="font-mono tabular-nums text-[10px]">
-                    {new Date(encryption.tested_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+                    {new Date(encryption?.tested_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
                   </span>
                 </div>
                 {!encryption.enabled && (
@@ -1604,14 +1604,14 @@ export function SettingsView() {
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Server Time</span>
                   <span className="font-mono tabular-nums">
-                    {new Date(timeSync.server_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+                    {new Date(timeSync?.server_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">NTP Time</span>
                   <span className="font-mono tabular-nums">
-                    {timeSync.ntp_time
-                      ? new Date(timeSync.ntp_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
+                    {timeSync?.ntp_time
+                      ? new Date(timeSync?.ntp_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })
                       : '—'}
                   </span>
                 </div>

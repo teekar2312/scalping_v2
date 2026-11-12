@@ -293,7 +293,7 @@ export function StrategyView() {
                           <td className={cn('py-2 px-2 text-right tabular-nums font-semibold',
                             row.rrNet >= 2.0 ? 'text-bull' : row.rrNet >= 1.3 ? 'text-warn' : 'text-bear'
                           )}>
-                            {row.rrNet.toFixed(2)}
+                            {(row?.rrNet ?? 0).toFixed(2)}
                           </td>
                           <td className="py-2 px-2 text-muted-foreground">{row.status}</td>
                         </tr>

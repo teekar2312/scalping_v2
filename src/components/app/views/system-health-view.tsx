@@ -285,7 +285,7 @@ export function SystemHealthView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {services.services.map((s) => (
+                {(services?.services ?? []).map((s) => (
                   <TableRow key={s.name}>
                     <TableCell className="text-xs font-medium">{s.name}</TableCell>
                     <TableCell>
@@ -610,7 +610,7 @@ function GaugeBar({
   return (
     <div className="pt-3">
       <div className="mb-2 flex items-baseline justify-between">
-        <span className="text-2xl font-bold tabular-nums">{percent.toFixed(1)}%</span>
+        <span className="text-2xl font-bold tabular-nums">{(percent ?? 0).toFixed(1)}%</span>
         <span className="text-xs text-muted-foreground tabular-nums">
           {formatBytes(used)} / {formatBytes(total)} {unit}
         </span>

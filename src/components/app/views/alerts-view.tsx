@@ -204,8 +204,8 @@ export function AlertsView() {
   const stats = useMemo(() => {
     const activeCount = alerts.filter((a) => a.active).length;
     const triggeredToday = alerts.filter((a) => {
-      if (!a.last_triggered) return false;
-      const lt = new Date(a.last_triggered).getTime();
+      if (!a?.last_triggered) return false;
+      const lt = new Date(a?.last_triggered).getTime();
       return Date.now() - lt < 24 * 3600_000;
     }).length;
     return { total: alerts.length, active: activeCount, triggeredToday };
@@ -430,8 +430,8 @@ export function AlertsView() {
                         })}
                       </TableCell>
                       <TableCell className="text-[10px] text-muted-foreground tabular-nums">
-                        {a.last_triggered
-                          ? new Date(a.last_triggered).toLocaleString('id-ID', {
+                        {a?.last_triggered
+                          ? new Date(a?.last_triggered).toLocaleString('id-ID', {
                               day: '2-digit',
                               month: 'short',
                               hour: '2-digit',

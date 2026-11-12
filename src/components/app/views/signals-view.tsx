@@ -96,7 +96,7 @@ export function SignalsView() {
           <PanelCard
             key={sig.id}
             title={`${sig.symbol} · ${sig.direction}`}
-            subtitle={new Date(sig.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+            subtitle={new Date(sig?.createdAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
             icon={sig.direction === 'BUY' ? TrendingUp : TrendingUp}
             actions={
               <Badge

@@ -451,14 +451,14 @@ export function MarketAnalysisView() {
                           <td
                             className={cn(
                               'text-right tabular-nums font-semibold',
-                              lvl.imbalance > 0.1
+                              (lvl?.imbalance ?? 0) > 0.1
                                 ? 'text-bull'
-                                : lvl.imbalance < -0.1
+                                : (lvl?.imbalance ?? 0) < -0.1
                                 ? 'text-bear'
                                 : 'text-muted-foreground'
                             )}
                           >
-                            {lvl.imbalance > 0 ? '+' : ''}{(lvl.imbalance * 100).toFixed(0)}%
+                            {(lvl?.imbalance ?? 0) > 0 ? '+' : ''}{((lvl?.imbalance ?? 0) * 100).toFixed(0)}%
                           </td>
                         </tr>
                       ))}
@@ -504,8 +504,8 @@ export function MarketAnalysisView() {
                       <span>{item.source}</span>
                       <span>·</span>
                       <span>
-                        {item.published_at
-                          ? new Date(item.published_at).toLocaleString('id-ID', {
+                        {item?.published_at
+                          ? new Date(item?.published_at).toLocaleString('id-ID', {
                               day: '2-digit',
                               month: 'short',
                               hour: '2-digit',
@@ -520,7 +520,7 @@ export function MarketAnalysisView() {
                         <>
                           <span>·</span>
                           <span className="flex items-center gap-0.5">
-                            {item.affected_currencies.map((c) => (
+                            {(item?.affected_currencies ?? []).map((c) => (
                               <Badge key={c} variant="outline" className="text-[8px] px-1 py-0 mr-0.5">
                                 {c}
                               </Badge>
@@ -636,10 +636,10 @@ function CorrelationHeatmap({ pairs, matrix }: { pairs: string[]; matrix: number
                       minWidth: 48,
                       height: 28,
                     }}
-                    title={`${row} vs ${col}: ${v.toFixed(2)}`}
+                    title={`${row} vs ${col}: ${(v ?? 0).toFixed(2)}`}
                   >
                     <span className={cn('font-mono font-semibold', textColor)}>
-                      {v.toFixed(2)}
+                      {(v ?? 0).toFixed(2)}
                     </span>
                   </td>
                 );

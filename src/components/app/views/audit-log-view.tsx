@@ -346,7 +346,7 @@ export function AuditLogView() {
                     )}
                     <div className="text-[10px] text-muted-foreground mt-1">
                       Verified at{' '}
-                      {new Date(chainVerify.verified_at).toLocaleString('id-ID', {
+                      {new Date(chainVerify?.verified_at).toLocaleString('id-ID', {
                         timeZone: 'Asia/Jakarta',
                       })}{' '}
                       WIB

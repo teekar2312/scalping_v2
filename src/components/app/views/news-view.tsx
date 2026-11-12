@@ -45,7 +45,7 @@ export function NewsView() {
 
   const nextHigh = upcoming.find((n) => n.impact === 'HIGH');
   const nextHighTime = nextHigh
-    ? new Date(nextHigh.eventTime).toLocaleString('id-ID', {
+    ? new Date(nextHigh?.eventTime).toLocaleString('id-ID', {
         day: '2-digit',
         month: 'short',
         hour: '2-digit',

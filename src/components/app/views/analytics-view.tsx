@@ -123,14 +123,14 @@ export function AnalyticsView() {
   }
 
   const slippageChartData = Array.isArray(slippage?.time_series)
-    ? slippage!.time_series.map((p) => ({
+    ? (slippage?.time_series ?? []).map((p) => ({
         time: fmtTime(p.timestamp),
         avg: p.avg_pips,
         p95: p.p95_pips,
       }))
     : [];
   const latencyChartData = Array.isArray(latency?.time_series)
-    ? latency!.time_series.map((p) => ({
+    ? (latency?.time_series ?? []).map((p) => ({
         time: fmtTime(p.timestamp),
         avg: p.avg_ms,
         p95: p.p95_ms,
