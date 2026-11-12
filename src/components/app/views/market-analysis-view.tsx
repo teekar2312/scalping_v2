@@ -416,20 +416,20 @@ export function MarketAnalysisView() {
           <div className="pt-3">
             {orderFlow && (
               <>
-                {!orderFlow.supported && (
+                {!orderFlow?.supported && (
                   <div className="mb-3 rounded-md border border-warn/30 bg-warn/5 p-2 text-[10px] text-warn flex items-start gap-2">
                     <FlaskConical className="h-3 w-3 shrink-0 mt-0.5" />
-                    <span>{orderFlow.note}</span>
+                    <span>{orderFlow?.note ?? ''}</span>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
                   <div className="rounded-md border p-2">
                     <div className="text-[10px] text-muted-foreground uppercase">Total Bid Vol</div>
-                    <div className="font-mono tabular-nums text-bull">{orderFlow.total_bid_volume.toLocaleString()}</div>
+                    <div className="font-mono tabular-nums text-bull">{(orderFlow?.total_bid_volume ?? 0).toLocaleString()}</div>
                   </div>
                   <div className="rounded-md border p-2">
                     <div className="text-[10px] text-muted-foreground uppercase">Total Ask Vol</div>
-                    <div className="font-mono tabular-nums text-bear">{orderFlow.total_ask_volume.toLocaleString()}</div>
+                    <div className="font-mono tabular-nums text-bear">{(orderFlow?.total_ask_volume ?? 0).toLocaleString()}</div>
                   </div>
                 </div>
                 <ScrollArea className="h-[180px]">
