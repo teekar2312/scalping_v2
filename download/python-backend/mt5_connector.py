@@ -354,15 +354,25 @@ class MT5Connector:
             return []
         bars: list[CandleBar] = []
         for r in rates:
+            # MT5 copy_rates_from_pos returns numpy structured array;
+            # each element is numpy.void (not dict) — use [] indexing, not .get()
             ts = float(r["time"])
             day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+            # Volume: try tick_volume first, then real_volume, then 0
+            try:
+                vol = float(r["tick_volume"])
+            except (KeyError, ValueError, TypeError):
+                try:
+                    vol = float(r["real_volume"])
+                except (KeyError, ValueError, TypeError):
+                    vol = 0.0
             bars.append(CandleBar(
                 time=ts,
                 open=float(r["open"]),
                 high=float(r["high"]),
                 low=float(r["low"]),
                 close=float(r["close"]),
-                volume=float(r.get("tick_volume", r.get("real_volume", 0))),
+                volume=vol,
                 day=day,
             ))
         return bars
