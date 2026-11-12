@@ -80,12 +80,20 @@ export function ChartView() {
   const [showBB, setShowBB] = useState(true);
   const [showVWAP, setShowVWAP] = useState(true);
   const [flash, setFlash] = useState<'up' | 'down' | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getChartData(activeSymbol).then((data) => {
-      if (!cancelled) setChartData(data);
-    });
+    getChartData(activeSymbol)
+      .then((data) => {
+        if (!cancelled) { setChartData(data); setChartError(null); }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setChartError(String(err?.message ?? err));
+          setChartData(null);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -110,7 +118,6 @@ export function ChartView() {
 
   // Derived loading state - true when data missing or symbol mismatch
   const loading = !chartData || chartData.symbol !== activeSymbol;
-
   const chartRows = useMemo(() => {
     if (!chartData) return [];
     const ind = chartData.indicators;
@@ -166,6 +173,26 @@ export function ChartView() {
   const slPips = latestAtr * V2_RULES.SL_ATR_MULT + V2_RULES.SL_PIP_BUFFER;
   const tp1Pips = slPips * V2_RULES.TP1_MULT;
   const digits = activeSymbol === 'USDJPY' ? 3 : 5;
+
+  if (chartError) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+        <div className="text-sm font-semibold text-bear">Chart Error: {activeSymbol}</div>
+        <div className="text-xs text-muted-foreground max-w-md text-center">{chartError}</div>
+        <div className="text-xs text-muted-foreground mt-2">
+          Pastikan backend sudah di-restart dengan kode terbaru:
+          <pre className="mt-2 p-2 bg-muted rounded text-[10px] font-mono">cd download\python-backend
+.\run.bat</pre>
+        </div>
+        <button
+          className="mt-2 rounded-md border px-3 py-1 text-xs hover:bg-accent"
+          onClick={() => { setChartError(null); setChartData(null); }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (loading || !chartData || !latest) {
     return (
