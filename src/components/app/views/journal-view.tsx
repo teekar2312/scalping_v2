@@ -122,13 +122,13 @@ function AttributionTable({ title, rows }: { title: string; rows: Record<string,
               <td className="py-1 font-medium">{cat.replace('_', ' ')}</td>
               <td className="text-right tabular-nums">{s.trades}</td>
               <td className={cn('text-right tabular-nums', s.win_rate >= 45 ? 'text-bull' : 'text-bear')}>
-                {s.win_rate.toFixed(1)}%
+                {(s.win_rate ?? 0).toFixed(1)}%
               </td>
-              <td className={cn('text-right tabular-nums', s.r_net >= 0 ? 'text-bull' : 'text-bear')}>
-                {s.r_net >= 0 ? '+' : ''}{s.r_net.toFixed(2)}
+              <td className={cn('text-right tabular-nums', (s.r_net ?? 0) >= 0 ? 'text-bull' : 'text-bear')}>
+                {(s.r_net ?? 0) >= 0 ? '+' : ''}{(s.r_net ?? 0).toFixed(2)}
               </td>
-              <td className={cn('text-right tabular-nums', s.profit >= 0 ? 'text-bull' : 'text-bear')}>
-                {s.profit >= 0 ? '+' : ''}{s.profit.toFixed(2)}
+              <td className={cn('text-right tabular-nums', (s.profit ?? 0) >= 0 ? 'text-bull' : 'text-bear')}>
+                {(s.profit ?? 0) >= 0 ? '+' : ''}{(s.profit ?? 0).toFixed(2)}
               </td>
             </tr>
           ))}
@@ -434,7 +434,7 @@ function TradeReconstructionModal({
                 {/* Vertical line */}
                 <div className="absolute left-3 top-0 bottom-0 w-px bg-border" />
                 <div className="space-y-3">
-                  {recon.events.map((ev, idx) => {
+                  {(recon?.events ?? []).map((ev, idx) => {
                     const color = EVENT_TYPE_COLOR[ev.type];
                     return (
                       <div key={idx} className="relative pl-9">
@@ -928,9 +928,9 @@ export function JournalView() {
                   <>
                     <ComplianceGauge value={compliance.overall_pct} />
                     <div className="space-y-2 mt-3 border-t pt-3">
-                      <StatRow label="Checklist Pass Rate" value={`${compliance.checklist_pass_rate.toFixed(1)}%`} tone={compliance.checklist_pass_rate >= 90 ? 'bull' : 'warn'} />
-                      <StatRow label="RR Compliance Rate" value={`${compliance.rr_compliance_rate.toFixed(1)}%`} tone={compliance.rr_compliance_rate >= 85 ? 'bull' : 'warn'} />
-                      <StatRow label="AI Compliance Rate" value={`${compliance.ai_compliance_rate.toFixed(1)}%`} tone={compliance.ai_compliance_rate >= 85 ? 'bull' : 'warn'} />
+                      <StatRow label="Checklist Pass Rate" value={`${(compliance.checklist_pass_rate ?? 0).toFixed(1)}%`} tone={(compliance.checklist_pass_rate ?? 0) >= 90 ? 'bull' : 'warn'} />
+                      <StatRow label="RR Compliance Rate" value={`${(compliance.rr_compliance_rate ?? 0).toFixed(1)}%`} tone={(compliance.rr_compliance_rate ?? 0) >= 85 ? 'bull' : 'warn'} />
+                      <StatRow label="AI Compliance Rate" value={`${(compliance.ai_compliance_rate ?? 0).toFixed(1)}%`} tone={(compliance.ai_compliance_rate ?? 0) >= 85 ? 'bull' : 'warn'} />
                       <StatRow label="Total Trades" value={String(compliance.total_trades)} />
                     </div>
                   </>

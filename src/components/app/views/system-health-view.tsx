@@ -415,7 +415,7 @@ export function SystemHealthView() {
                   </Badge>
                 </div>
                 <div className="flex flex-col gap-1">
-                  {readiness.checks.map((c) => (
+                  {(readiness?.checks ?? []).map((c) => (
                     <div key={c.name} className="flex items-center justify-between text-[10px]">
                       <span className="flex items-center gap-1">
                         <span

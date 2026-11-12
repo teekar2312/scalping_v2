@@ -1447,15 +1447,19 @@ class TradingEngine:
         equity = self.state.equity or self.state.balance
         peak = self.state.peak_equity or equity
         dd_pct = ((peak - equity) / peak * 100.0) if peak > 0 else 0.0
+        max_dd = round(self.state.max_drawdown_realtime_pct, 4)
         return {
             "current_drawdown_pct": round(dd_pct, 4),
-            "max_drawdown_realtime_pct": round(
-                self.state.max_drawdown_realtime_pct, 4),
+            "max_drawdown_realtime_pct": max_dd,
+            "max_drawdown_pct_24h": max_dd,  # alias for frontend
             "peak_equity": round(peak, 2),
             "current_equity": round(equity, 2),
+            "trough_equity_24h": round(equity, 2),  # best-effort alias
             "recovery_target_equity": self.state.recovery_target_equity,
+            "recovered": dd_pct < 0.01,
             "alert_80pct_active": self.state.drawdown_alert_80pct,
             "last_tick_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),  # alias
         }
 
     # ------------------------------------------------------------------ #

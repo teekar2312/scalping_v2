@@ -752,7 +752,7 @@ export function BacktestView() {
                         formatter={(v: number) => [`${v} runs`, 'Count']}
                       />
                       <Bar dataKey="count" radius={[3, 3, 0, 0]}>
-                        {mcResult.distribution.map((b, i) => (
+                        {(mcResult?.distribution ?? []).map((b, i) => (
                           <Cell
                             key={i}
                             fill={b.lower >= mcInitialBalance ? 'var(--bull)' : 'var(--bear)'}
@@ -996,7 +996,7 @@ export function BacktestView() {
                           </tr>
                         </thead>
                         <tbody>
-                          {wfResult.windows.map((w) => (
+                          {(wfResult?.windows ?? []).map((w) => (
                             <tr key={w.window_index} className="border-b last:border-0 hover:bg-accent/30">
                               <td className="py-1.5 px-2 text-muted-foreground tabular-nums">{w.window_index}</td>
                               <td className="text-[10px] tabular-nums">{w.in_sample_start} → {w.in_sample_end}</td>
@@ -1043,7 +1043,7 @@ export function BacktestView() {
                 >
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
-                      data={wfResult.windows.map((w) => ({
+                      data={(wfResult?.windows ?? []).map((w) => ({
                         window: `W${w.window_index}`,
                         inSample: w.in_sample_pf,
                         outSample: w.out_sample_pf,
@@ -1060,7 +1060,7 @@ export function BacktestView() {
                       <ReferenceLine y={1.0} stroke="var(--muted-foreground)" strokeDasharray="3 3" />
                       <Bar dataKey="inSample" name="inSample" fill="var(--info)" radius={[3, 3, 0, 0]} />
                       <Bar dataKey="outSample" name="outSample" fill="var(--bull)" radius={[3, 3, 0, 0]}>
-                        {wfResult.windows.map((w, i) => (
+                        {(wfResult?.windows ?? []).map((w, i) => (
                           <Cell key={i} fill={w.out_sample_pf >= 1.0 ? 'var(--bull)' : 'var(--bear)'} />
                         ))}
                       </Bar>

@@ -1153,7 +1153,9 @@ export async function getRiskMetrics(
 
 export async function listStressScenarios(): Promise<StressScenario[]> {
   if (IS_DEMO) return getDemoStressScenarios();
-  return fetchAPI<StressScenario[]>('/api/analytics/stress-test/scenarios');
+  const res = await fetchAPI<unknown>('/api/analytics/stress-test/scenarios');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.scenarios ?? []);
+  return arr as StressScenario[];
 }
 
 export async function runStressTest(body: StressTestRequest): Promise<StressTestResult> {

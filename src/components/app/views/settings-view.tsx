@@ -952,10 +952,10 @@ export function SettingsView() {
                   <span className="text-muted-foreground">Cipher</span>
                   <span className="font-mono tabular-nums">{encryption.cipher ?? 'none'}</span>
                 </div>
-                {encryption.kdf_iters !== undefined && (
+                {(encryption.kdf_iters != null) && (
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground">KDF iterations</span>
-                    <span className="font-mono tabular-nums">{encryption.kdf_iters.toLocaleString()}</span>
+                    <span className="font-mono tabular-nums">{(encryption.kdf_iters ?? 0).toLocaleString()}</span>
                   </div>
                 )}
                 {encryption.page_size !== undefined && (
@@ -1537,7 +1537,7 @@ export function SettingsView() {
                 <StatusCheck ok={preLive.tiingo.ok} label="Tiingo Calendar" value={preLive.tiingo.ok ? `${preLive.tiingo.events_cached} events` : 'no events'} />
                 <StatusCheck ok={preLive.config.ok} label="Config" value={preLive.config.warnings.length > 0 ? `${preLive.config.warnings.length} warnings` : 'OK'} />
                 <StatusCheck ok={preLive.db.ok} label="Database" value={preLive.db.ok ? `${preLive.db.trade_count} trades` : 'error'} />
-                <StatusCheck ok={preLive.time_sync.ok} label="Time Sync (NTP)" value={preLive.time_sync.ok ? `${preLive.time_sync.drift_seconds?.toFixed(2)}s drift` : 'drift excessive'} />
+                <StatusCheck ok={preLive.time_sync?.ok} label="Time Sync (NTP)" value={preLive.time_sync?.ok ? `${preLive.time_sync?.drift_seconds?.toFixed(2)}s drift` : 'drift excessive'} />
 
                 {preLive.blocking_issues.length > 0 && (
                   <div className="mt-3 rounded-md border border-bear/40 bg-bear/10 p-2 text-[10px] text-bear">
@@ -1620,10 +1620,10 @@ export function SettingsView() {
                   <span
                     className={cn(
                       'font-mono tabular-nums font-semibold',
-                      timeSync.drift_seconds > 1 ? 'text-bear' : timeSync.drift_seconds > 0.5 ? 'text-warn' : 'text-bull',
+                      (timeSync.drift_seconds ?? 0) > 1 ? 'text-bear' : (timeSync.drift_seconds ?? 0) > 0.5 ? 'text-warn' : 'text-bull',
                     )}
                   >
-                    {timeSync.drift_seconds.toFixed(3)}s
+                    {(timeSync.drift_seconds ?? 0).toFixed(3)}s
                   </span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
