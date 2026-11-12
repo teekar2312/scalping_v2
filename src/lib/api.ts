@@ -1064,7 +1064,21 @@ export async function revokeApiKey(id: string): Promise<{ ok: boolean }> {
 
 export async function listSecrets(): Promise<SecretListResponse> {
   if (IS_DEMO) return { secrets: getDemoSecrets() };
-  return fetchAPI<SecretListResponse>('/api/secrets');
+  const raw = await fetchAPI<unknown>('/api/secrets');
+  const r = raw as Record<string, any>;
+  // Backend returns {count, names: string[], encryption_enabled}
+  // Frontend expects {secrets: SecretMetadata[]}
+  if (r?.secrets && Array.isArray(r.secrets)) {
+    return { secrets: r.secrets };
+  }
+  const names: string[] = Array.isArray(r?.names) ? r.names : [];
+  return {
+    secrets: names.map((name) => ({
+      name,
+      updated_at: r?.cached_at ?? new Date().toISOString(),
+      set_by: 'admin',
+    })),
+  } as SecretListResponse;
 }
 
 export async function setSecret(name: string, value: string): Promise<{ ok: boolean }> {

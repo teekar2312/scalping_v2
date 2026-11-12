@@ -248,7 +248,7 @@ export function SettingsView() {
       .then(([k, s, r, b, e]) => {
         if (!mounted) return;
         setApiKeys(k.keys);
-        setSecrets(s.secrets);
+        setSecrets(Array.isArray(s?.secrets) ? s.secrets : []);
         setRiskStatus(r);
         setBappebti(b);
         setEncryption(e);
