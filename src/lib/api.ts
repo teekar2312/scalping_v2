@@ -1231,12 +1231,46 @@ export async function getLatencyStats(hours = 24): Promise<LatencyStats> {
 
 export async function getHealthz(): Promise<HealthzResponse> {
   if (IS_DEMO) return getDemoHealthz();
-  return fetchAPI<HealthzResponse>('/healthz');
+  const raw = await fetchAPI<unknown>('/healthz');
+  const r = raw as Record<string, any>;
+  // Backend returns {status:"ok", uptime_s, version, ts} → map to frontend format
+  return {
+    status: r?.status === 'ok' ? 'healthy' : (r?.status ?? 'unhealthy'),
+    uptime_seconds: r?.uptime_s ?? r?.uptime_seconds ?? 0,
+    version: r?.version ?? 'unknown',
+    checked_at: r?.ts ?? r?.checked_at ?? new Date().toISOString(),
+  } as HealthzResponse;
 }
 
 export async function getReadiness(): Promise<ReadinessResponse> {
   if (IS_DEMO) return getDemoReadiness();
-  return fetchAPI<ReadinessResponse>('/readyz');
+  const raw = await fetchAPI<unknown>('/readyz');
+  // Backend returns flat: {ready, db:{ok,latency_ms}, mt5:{ok,server}, ollama:{ok,model}, tiingo:{ok}, disk:{}, memory:{}, ts}
+  // Frontend expects: {status, checks: [{name, status, latency_ms, message}], checked_at}
+  const r = raw as Record<string, any>;
+  if (r && r.checks && Array.isArray(r.checks)) {
+    return r as ReadinessResponse; // already correct format
+  }
+  // Build checks array from flat backend response
+  const checks: any[] = [];
+  const services = ['db', 'mt5', 'ollama', 'tiingo', 'disk', 'memory'];
+  for (const svc of services) {
+    const info = r?.[svc];
+    if (info && typeof info === 'object') {
+      checks.push({
+        name: svc.toUpperCase(),
+        status: info.ok ? 'healthy' : 'unhealthy',
+        latency_ms: info.latency_ms ?? 0,
+        message: info.server || info.model || (info.ok ? 'OK' : 'error'),
+      });
+    }
+  }
+  const allOk = r?.ready ?? checks.every((c) => c.status === 'healthy');
+  return {
+    status: allOk ? 'healthy' : 'degraded',
+    checks,
+    checked_at: r?.ts ?? r?.checked_at ?? new Date().toISOString(),
+  } as ReadinessResponse;
 }
 
 // --- Encryption status (SQLCipher) ------------------------------------------ //
