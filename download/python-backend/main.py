@@ -584,11 +584,16 @@ def _mt5_unavailable_response() -> JSONResponse:
 
 
 def _safe_call(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Call an MT5 function and translate MT5UnavailableError to HTTP 503."""
+    """Call an MT5 function and translate errors appropriately."""
     try:
         return func(*args, **kwargs)
     except MT5UnavailableError:
-        raise HTTPException(status_code=503, detail=str(MT5UnavailableError))
+        raise HTTPException(status_code=503, detail="MT5 unavailable")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("_safe_call %s failed: %s", getattr(func, '__name__', 'unknown'), exc)
+        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -2415,7 +2420,22 @@ async def api_chart(request: Request,
         return {"symbol": symbol, "candles": [], "indicators": {},
                 "mt5_connected": False}
     try:
-        bars = _safe_call(get_connector().get_candles, mt5_sym, timeframe, count)
+        # Ensure symbol is visible in Market Watch before fetching candles
+        try:
+            get_connector().ensure_symbol_visible(mt5_sym)
+        except Exception as vis_exc:
+            logger.warning("ensure_symbol_visible(%s) failed: %s", mt5_sym, vis_exc)
+        # Fetch candles — try mt5_sym first, fall back to raw symbol
+        try:
+            bars = _safe_call(get_connector().get_candles, mt5_sym, timeframe, count)
+        except Exception:
+            # Retry with raw symbol name (broker might use different naming)
+            logger.info("Retrying candles with raw symbol %s", symbol)
+            try:
+                get_connector().ensure_symbol_visible(symbol)
+            except Exception:
+                pass
+            bars = _safe_call(get_connector().get_candles, symbol, timeframe, count)
         candles = [Candle(time=b.time, open=b.open, high=b.high, low=b.low,
                           close=b.close, volume=b.volume, day=b.day)
                    for b in bars]
