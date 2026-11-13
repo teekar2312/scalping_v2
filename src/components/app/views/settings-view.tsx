@@ -697,11 +697,11 @@ export function SettingsView() {
                 <div className="space-y-1 text-xs">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Broker</span>
-                    <span className="font-medium text-right text-[11px]">{bappebti.broker_name}</span>
+                    <span className="font-medium text-right text-[11px]">{bappebti?.broker_name ?? '—'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">License</span>
-                    <span className="font-mono tabular-nums">{bappebti.bappebti_license ?? '—'}</span>
+                    <span className="font-mono tabular-nums">{bappebti?.bappebti_license ?? '—'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Status</span>
@@ -709,24 +709,24 @@ export function SettingsView() {
                       variant="outline"
                       className={cn(
                         'text-[10px]',
-                        bappebti.status === 'REGISTERED' && 'text-bull border-bull',
-                        bappebti.status === 'PENDING' && 'text-warn border-warn',
-                        bappebti.status === 'NOT_REGISTERED' && 'text-bear border-bear',
-                        bappebti.status === 'UNKNOWN' && 'text-muted-foreground',
+                        bappebti?.status ?? 'UNKNOWN' === 'REGISTERED' && 'text-bull border-bull',
+                        bappebti?.status ?? 'UNKNOWN' === 'PENDING' && 'text-warn border-warn',
+                        bappebti?.status ?? 'UNKNOWN' === 'NOT_REGISTERED' && 'text-bear border-bear',
+                        bappebti?.status ?? 'UNKNOWN' === 'UNKNOWN' && 'text-muted-foreground',
                       )}
                     >
-                      {bappebti.status}
+                      {bappebti?.status ?? 'UNKNOWN'}
                     </Badge>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Last checked</span>
                     <span className="font-mono tabular-nums text-[10px]">
-                      {new Date(bappebti?.last_checked).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
+                      {new Date(bappebti?.last_checked ?? '').toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}
                     </span>
                   </div>
-                  {bappebti.warnings.length > 0 && (
+                  {(bappebti?.warnings ?? []).length > 0 && (
                     <div className="mt-2 rounded-md border border-warn/40 bg-warn/10 p-2 text-[10px] text-warn">
-                      {bappebti.warnings.join(' · ')}
+                      {(bappebti?.warnings ?? []).join(' · ')}
                     </div>
                   )}
                 </div>
