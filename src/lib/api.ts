@@ -1383,7 +1383,7 @@ export async function getEnhancedHealthz(): Promise<EnhancedHealthzResponse> {
       checked_at: new Date().toISOString(),
     };
   }
-  return fetchAPI<EnhancedHealthzResponse>('/api/healthz');
+  return fetchAPI<EnhancedHealthzResponse>('/healthz');
 }
 
 export async function getMetrics(): Promise<string> {
