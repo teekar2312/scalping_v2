@@ -365,12 +365,12 @@ export function SystemHealthView() {
                 <StatusDot
                   status={broker.tiingo_connected ? 'ok' : 'error'}
                   label="Tiingo"
-                  value={broker.primary === 'tiingo' ? 'PRIMARY' : 'standby'}
+                  value={broker.tiingo_connected ? 'Connected' : 'standby'}
                 />
                 <div className="my-1 border-t" />
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Primary</span>
-                  <span className="font-semibold tabular-nums">{broker.primary}</span>
+                  <span className="font-semibold tabular-nums">{typeof broker.primary === 'string' ? broker.primary : (broker.mt5_server ?? '—')}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Failover Active</span>
