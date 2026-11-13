@@ -1169,7 +1169,7 @@ async def api_bot_dry_run(request: Request,
          summary="Query audit log",
          responses={200: {"description": "Audit events"},
                     401: {"description": "Authentication required"}})
-@limiter.limit("60/minute")
+@limiter.limit("120/minute")
 async def api_audit_log(request: Request,
                         limit: int = 200,
                         offset: int = 0,

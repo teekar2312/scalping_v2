@@ -61,18 +61,20 @@ export function KillSwitchButton() {
             <ShieldAlert className="h-5 w-5" />
             AKTIVASI KILL SWITCH
           </AlertDialogTitle>
-          <AlertDialogDescription className="text-sm">
-            <strong className="text-foreground">PERINGATAN:</strong> Tindakan ini akan:
-            <ul className="mt-2 list-disc pl-4 space-y-1">
-              <li>Menutup SEMUA posisi terbuka via market order</li>
-              <li>Membatalkan semua pending orders</li>
-              <li>Menghentikan trading engine secara paksa</li>
-              <li>Mengunci bot sampai manual reset</li>
-            </ul>
-            <span className="mt-3 block text-xs text-muted-foreground">
-              Hanya gunakan saat darurat (loss tidak terkendali, news black swan, atau kesalahan sistem).
-              Eksekusi tidak dapat dibatalkan.
-            </span>
+          <AlertDialogDescription asChild className="text-sm">
+            <div>
+              <strong className="text-foreground">PERINGATAN:</strong> Tindakan ini akan:
+              <ul className="mt-2 list-disc pl-4 space-y-1">
+                <li>Menutup SEMUA posisi terbuka via market order</li>
+                <li>Membatalkan semua pending orders</li>
+                <li>Menghentikan trading engine secara paksa</li>
+                <li>Mengunci bot sampai manual reset</li>
+              </ul>
+              <span className="mt-3 block text-xs text-muted-foreground">
+                Hanya gunakan saat darurat (loss tidak terkendali, news black swan, atau kesalahan sistem).
+                Eksekusi tidak dapat dibatalkan.
+              </span>
+            </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

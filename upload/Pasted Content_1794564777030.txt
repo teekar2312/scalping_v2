@@ -1,0 +1,278 @@
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 200 OK
+{"timestamp": "2026-11-13T10:11:38.687374+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "601e8daaee5a4c0dbab6793ce9f81f12", "trace_id": "601e8daaee5a4c0dbab6793ce9f81f12"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:61063 - "GET /api/risk-disclosure/status HTTP/1.1" 200 OK
+{"timestamp": "2026-11-13T10:11:39.019848+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://localhost:11434/api/tags \"HTTP/1.1 200 OK\"", "request_id": "233b1bc9c02349b68f2b191b1c8845ca", "trace_id": "233b1bc9c02349b68f2b191b1c8845ca"}
+{"timestamp": "2026-11-13T10:11:39.046692+00:00", "level": "WARNING", "logger": "forex_backend", "message": "NTP drift > 5.0s: 2208988799.93s", "request_id": "233b1bc9c02349b68f2b191b1c8845ca", "trace_id": "233b1bc9c02349b68f2b191b1c8845ca"}
+INFO:     127.0.0.1:61063 - "POST /api/bot/start HTTP/1.1" 400 Bad Request
+{"timestamp": "2026-11-13T10:11:39.611475+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2f399b8a600c4ca4826f115cee034658", "trace_id": "2f399b8a600c4ca4826f115cee034658"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:39.649745+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "5536d85f8fbd41bea8f96ea8eefc4094", "trace_id": "5536d85f8fbd41bea8f96ea8eefc4094"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:39.671052+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "6e34c4f55f364dada84bfc43532c8bd8", "trace_id": "6e34c4f55f364dada84bfc43532c8bd8"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:40.618214+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "426bbb801f3043dbac9a06e5ed5cc537", "trace_id": "426bbb801f3043dbac9a06e5ed5cc537"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:40.657364+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "9bcf74a27150482dbd03f7fbf0ab66a2", "trace_id": "9bcf74a27150482dbd03f7fbf0ab66a2"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:40.675467+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "494b4c7e7f3147608f4b8518bb73af10", "trace_id": "494b4c7e7f3147608f4b8518bb73af10"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:40.800653+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "c2be4398a9c44c05b1f61cc8b7990a64", "trace_id": "c2be4398a9c44c05b1f61cc8b7990a64"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:41.625140+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "f124e4f003cf433a97fcb9345e7940a3", "trace_id": "f124e4f003cf433a97fcb9345e7940a3"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:41.663866+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "79c6cea194cf42fe8e3ea7f8ddcd68bc", "trace_id": "79c6cea194cf42fe8e3ea7f8ddcd68bc"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:41.683034+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "4ab2ecac0a1348d2998024f9363bc186", "trace_id": "4ab2ecac0a1348d2998024f9363bc186"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:42.641507+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "f92b26c7cfcc470ba38a8891cdd67d61", "trace_id": "f92b26c7cfcc470ba38a8891cdd67d61"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:42.662581+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "025957f76e3541edaf3d9792663197b8", "trace_id": "025957f76e3541edaf3d9792663197b8"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:42.687500+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "fbaee95a5b994e6792e915fb4b672523", "trace_id": "fbaee95a5b994e6792e915fb4b672523"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:42.724850+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ea332011fe0041e8a99d520f6e784f00", "trace_id": "ea332011fe0041e8a99d520f6e784f00"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:43.641476+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "722fdecbfc8d4c4381f4fef619f7a70f", "trace_id": "722fdecbfc8d4c4381f4fef619f7a70f"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:43.679460+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "9b5dd559151e49f68829815d7e80db3d", "trace_id": "9b5dd559151e49f68829815d7e80db3d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:43.698749+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "57c0fc6ce35844a9bcd21108bbb01172", "trace_id": "57c0fc6ce35844a9bcd21108bbb01172"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:44.682210+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "7e4f151f07184239809e752600e4e7ab", "trace_id": "7e4f151f07184239809e752600e4e7ab"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:44.720346+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "0684f57e78134b239c0142f4dd776902", "trace_id": "0684f57e78134b239c0142f4dd776902"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:44.739291+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "da33bb37ef1c40c8bfeae8463efcb366", "trace_id": "da33bb37ef1c40c8bfeae8463efcb366"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:45.682485+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "92212990816442b1963d9153528f784e", "trace_id": "92212990816442b1963d9153528f784e"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:45.721406+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "76eaddd9951c4c05a6bb7f030e471278", "trace_id": "76eaddd9951c4c05a6bb7f030e471278"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:45.741058+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "a0763c5eb1004d7eb4a211ff5b45734c", "trace_id": "a0763c5eb1004d7eb4a211ff5b45734c"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:45.797109+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "eb7140ea4e004e3aa1d1a7dd1f2eb7ab", "trace_id": "eb7140ea4e004e3aa1d1a7dd1f2eb7ab"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:46.687869+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "1dea2ca764714349b99848a088e58cfa", "trace_id": "1dea2ca764714349b99848a088e58cfa"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:46.726982+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "c21df6bb3dba491785d7c3f55b819060", "trace_id": "c21df6bb3dba491785d7c3f55b819060"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:46.745244+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "98e41ef712de42bda55ad372d5e6c631", "trace_id": "98e41ef712de42bda55ad372d5e6c631"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:47.699524+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "384e65ed25b94e61ad1e6e88c4e78f70", "trace_id": "384e65ed25b94e61ad1e6e88c4e78f70"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:47.738964+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "bc46fe286ecb4266a9069b9b0ec1ef1d", "trace_id": "bc46fe286ecb4266a9069b9b0ec1ef1d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:47.759242+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "cf98b216ccbf4c44b5a8581f3f9e3500", "trace_id": "cf98b216ccbf4c44b5a8581f3f9e3500"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:48.675051+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "975a6c93f86e4458ad932489d83cb89c", "trace_id": "975a6c93f86e4458ad932489d83cb89c"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:48.712339+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "92293a8a827f485d87b5e4aa80a6f28e", "trace_id": "92293a8a827f485d87b5e4aa80a6f28e"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:48.731004+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "4824c7f4d67c474e9504e47a051daadc", "trace_id": "4824c7f4d67c474e9504e47a051daadc"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:49.709929+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "83f54d6bb75e49bcb4975a2f1362f909", "trace_id": "83f54d6bb75e49bcb4975a2f1362f909"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:49.747498+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2d462645415d482381ae35e8c16bcb1d", "trace_id": "2d462645415d482381ae35e8c16bcb1d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:49.765774+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "48c25a50f6b240e897838a1e8b7aa62e", "trace_id": "48c25a50f6b240e897838a1e8b7aa62e"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:50.694339+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "b6c000555b4243c4a53d474b6c92a31e", "trace_id": "b6c000555b4243c4a53d474b6c92a31e"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:50.732308+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "bb04b653aa13475f8e7942dead78484c", "trace_id": "bb04b653aa13475f8e7942dead78484c"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:50.751297+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "09c265c79bc941708d7f445202731388", "trace_id": "09c265c79bc941708d7f445202731388"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:50.794532+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "04fd85c7c7c04eaeb1c5473a56c2fb07", "trace_id": "04fd85c7c7c04eaeb1c5473a56c2fb07"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:51.812614+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2596ab5e371845949f3e592d45e89f57", "trace_id": "2596ab5e371845949f3e592d45e89f57"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:51.873934+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "1d237be734be4c0d9b4cb7d391dface8", "trace_id": "1d237be734be4c0d9b4cb7d391dface8"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:51.895283+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "e9f729b135c145ef9f943565f45fdf2a", "trace_id": "e9f729b135c145ef9f943565f45fdf2a"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:52.724012+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "6f088baac2674ddb84481299ed6567e3", "trace_id": "6f088baac2674ddb84481299ed6567e3"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:52.774575+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "f469c084fd1047c6ba5c71020db8a914", "trace_id": "f469c084fd1047c6ba5c71020db8a914"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:52.800454+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "a314c381cb9647f2ac18254649fae598", "trace_id": "a314c381cb9647f2ac18254649fae598"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:53.735372+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "d2f421ce3a2d4e68844135b5555bdf7d", "trace_id": "d2f421ce3a2d4e68844135b5555bdf7d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:53.775819+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "498b7e815e8c48c99bf5a79a7b8fda14", "trace_id": "498b7e815e8c48c99bf5a79a7b8fda14"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:53.801795+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ee829aa637a24eefb799d2ef7fc5cea3", "trace_id": "ee829aa637a24eefb799d2ef7fc5cea3"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:54.117095+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://localhost:11434/api/tags \"HTTP/1.1 200 OK\"", "request_id": "955d37b96fa541e7be125e9bac3c317e", "trace_id": "955d37b96fa541e7be125e9bac3c317e"}
+INFO:     127.0.0.1:61063 - "GET /readyz HTTP/1.1" 200 OK
+{"timestamp": "2026-11-13T10:11:54.762063+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ef96d597b0e2490a9de936dae7d306a1", "trace_id": "ef96d597b0e2490a9de936dae7d306a1"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:54.804507+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2cb42277472e4900a3b7a9b3ab60e333", "trace_id": "2cb42277472e4900a3b7a9b3ab60e333"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:54.824552+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "a9a8741cb8014c07a7205d37c6a9a974", "trace_id": "a9a8741cb8014c07a7205d37c6a9a974"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:55.756256+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "43c0e0384a7040fea521b270423737af", "trace_id": "43c0e0384a7040fea521b270423737af"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:55.774299+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "98cb67fd06434e96826f7ecf5fc40087", "trace_id": "98cb67fd06434e96826f7ecf5fc40087"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:55.799589+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "70062cae79334c6cbbf147dc6da1665e", "trace_id": "70062cae79334c6cbbf147dc6da1665e"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:56.765672+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "33615c2a0c994ed691b98d0c461a8451", "trace_id": "33615c2a0c994ed691b98d0c461a8451"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:56.808648+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "0821e6f9d4d64beaa1eca423ceef83be", "trace_id": "0821e6f9d4d64beaa1eca423ceef83be"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:56.827493+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ee689e88966c40dc9389b14f7bf67759", "trace_id": "ee689e88966c40dc9389b14f7bf67759"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:56.856721+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "235b09dc040741f587f6d012e38206d6", "trace_id": "235b09dc040741f587f6d012e38206d6"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:57.771257+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "046901e307da4bd4b4c27dc5af8f387a", "trace_id": "046901e307da4bd4b4c27dc5af8f387a"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:57.811321+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "c1286fcebf05417ea5c349fec6a8eac6", "trace_id": "c1286fcebf05417ea5c349fec6a8eac6"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:57.836002+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "530ec909948748a9b89348dd43d79d6b", "trace_id": "530ec909948748a9b89348dd43d79d6b"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:57.865541+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "e5e864bd02ee4a30813e25c355f37081", "trace_id": "e5e864bd02ee4a30813e25c355f37081"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:58.780428+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "68957c440d6a4bf9b0111f561a68d78b", "trace_id": "68957c440d6a4bf9b0111f561a68d78b"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:58.801653+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "318af1bd017e4c9dbce1892a883bfc50", "trace_id": "318af1bd017e4c9dbce1892a883bfc50"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:58.827762+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "bec3031590664e8984aa59875e2ea6d8", "trace_id": "bec3031590664e8984aa59875e2ea6d8"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:59.777305+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "f283806adc8449c88b15a2f82468d9a2", "trace_id": "f283806adc8449c88b15a2f82468d9a2"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:59.816523+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "57c10cc109ec47729c48fcff19545731", "trace_id": "57c10cc109ec47729c48fcff19545731"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:11:59.841480+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "888191b38817464981c0cbc0b59560f9", "trace_id": "888191b38817464981c0cbc0b59560f9"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:00.785889+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ea1e14eb8ed542a3bb3d6df4dca693dc", "trace_id": "ea1e14eb8ed542a3bb3d6df4dca693dc"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:00.811872+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "49a80b038b0e45fc84543e2e910a2b1f", "trace_id": "49a80b038b0e45fc84543e2e910a2b1f"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:00.841075+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "dca8052a3d644547adc7c19e393d5b51", "trace_id": "dca8052a3d644547adc7c19e393d5b51"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:01.782251+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "8876f5b2018e47bd80acdb4279d68c0d", "trace_id": "8876f5b2018e47bd80acdb4279d68c0d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:01.824105+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "e06d1ca6e9ce400bb0d49d5dc8cb518b", "trace_id": "e06d1ca6e9ce400bb0d49d5dc8cb518b"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:01.876126+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "4931a4003f174797bcb7c0558997e9fd", "trace_id": "4931a4003f174797bcb7c0558997e9fd"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:01.909480+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "303f1e468fc746a59fb25500b2739bc7", "trace_id": "303f1e468fc746a59fb25500b2739bc7"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:02.818967+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2b9564e317b347bc98ad5013ca25bab7", "trace_id": "2b9564e317b347bc98ad5013ca25bab7"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:02.864821+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "b672d0175b644ae1b60044b3e00e9113", "trace_id": "b672d0175b644ae1b60044b3e00e9113"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:02.887207+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "dc5e8be3682e4d9ebca6b11f65065f8d", "trace_id": "dc5e8be3682e4d9ebca6b11f65065f8d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:03.859434+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ef9e68e664e64126b874ae28635b7416", "trace_id": "ef9e68e664e64126b874ae28635b7416"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:03.904935+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2b8db11731de438bb7fe09e398adb7fc", "trace_id": "2b8db11731de438bb7fe09e398adb7fc"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:03.928986+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "7191e9a1d54c482495a71e5b3e7a5326", "trace_id": "7191e9a1d54c482495a71e5b3e7a5326"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:04.841102+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "23cd24eb1c4848b7919b54d1797cd465", "trace_id": "23cd24eb1c4848b7919b54d1797cd465"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:04.865220+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "e1ec92a768c24cb78cedde9ac539936d", "trace_id": "e1ec92a768c24cb78cedde9ac539936d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:04.892646+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "f724855216004476b5d38427339d99b2", "trace_id": "f724855216004476b5d38427339d99b2"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:05.838118+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "8746afebccc6456b9b2443838fecdcf0", "trace_id": "8746afebccc6456b9b2443838fecdcf0"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:05.881738+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "15443aac9c7a455a922f3e54bba38789", "trace_id": "15443aac9c7a455a922f3e54bba38789"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:05.910096+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "6a10c4e6eeb94b13b4dbec4329163ba0", "trace_id": "6a10c4e6eeb94b13b4dbec4329163ba0"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:06.785556+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "62db59845b8c42848452e1a9d7f35ae4", "trace_id": "62db59845b8c42848452e1a9d7f35ae4"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:06.852779+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "c7a19725c9eb4dfe9c10bb102cc6bb29", "trace_id": "c7a19725c9eb4dfe9c10bb102cc6bb29"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:06.894023+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "fed25f65cb004211a9cee33d7be71d5b", "trace_id": "fed25f65cb004211a9cee33d7be71d5b"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:06.915136+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "df06664f4b2a42499b34b80b8c8a86df", "trace_id": "df06664f4b2a42499b34b80b8c8a86df"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:07.846421+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "b7d27810fc4248e3ae5d3ac70e088c1b", "trace_id": "b7d27810fc4248e3ae5d3ac70e088c1b"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:07.900206+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "c77b45c77f4a4bdd8c87f84576503d41", "trace_id": "c77b45c77f4a4bdd8c87f84576503d41"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:07.931520+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "32e85141b5f54e089452fdb213500648", "trace_id": "32e85141b5f54e089452fdb213500648"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:08.856887+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "3b7f96d0ce074e74936cbfc860c9cf70", "trace_id": "3b7f96d0ce074e74936cbfc860c9cf70"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:08.879167+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "4cc0187e73324f90a7fd8aad38dd6c57", "trace_id": "4cc0187e73324f90a7fd8aad38dd6c57"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:08.907190+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "12f7f38a60734776ad8c8a167fab70b9", "trace_id": "12f7f38a60734776ad8c8a167fab70b9"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:09.887993+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2b83df515ab14e338abd27101181152b", "trace_id": "2b83df515ab14e338abd27101181152b"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:09.929172+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "2775604b796c45329cbdd3177a0f2020", "trace_id": "2775604b796c45329cbdd3177a0f2020"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:09.955268+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "fadae309bc024b988a27776243cc5760", "trace_id": "fadae309bc024b988a27776243cc5760"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:10.871595+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "130e27617ba64cfd8c680eab2e89b4ba", "trace_id": "130e27617ba64cfd8c680eab2e89b4ba"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:10.915628+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "5ae3ba4ca7314790bace12fa6775a456", "trace_id": "5ae3ba4ca7314790bace12fa6775a456"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:10.934307+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "a5afb57770d04696b6d9ffa2a0cc94a7", "trace_id": "a5afb57770d04696b6d9ffa2a0cc94a7"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:11.774180+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "67fa71acded84272ba01bde9dc9d433d", "trace_id": "67fa71acded84272ba01bde9dc9d433d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:11.880035+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "6573addf94a448d9a739fb5403f7063c", "trace_id": "6573addf94a448d9a739fb5403f7063c"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:11.931577+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "a84e71c89e1d449a8bc7034306e9f480", "trace_id": "a84e71c89e1d449a8bc7034306e9f480"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:11.961246+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "255feb9f165b46709f5b65718595285c", "trace_id": "255feb9f165b46709f5b65718595285c"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:12.887170+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "b3d594445694496eae341839ed9bdee6", "trace_id": "b3d594445694496eae341839ed9bdee6"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:12.932462+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "9fa75bbf7f8a42418643b6a885fb9ea9", "trace_id": "9fa75bbf7f8a42418643b6a885fb9ea9"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:12.952117+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "6fa971fae1244d5a810e632c781730d1", "trace_id": "6fa971fae1244d5a810e632c781730d1"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:12.975065+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "3d7a6305b1344933a3e54b76d4a4f1a1", "trace_id": "3d7a6305b1344933a3e54b76d4a4f1a1"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:13.909413+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "cf514c27e1074a99ade35ba89f46d255", "trace_id": "cf514c27e1074a99ade35ba89f46d255"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:13.959316+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "70bdd52aa10642cab187da0402727af2", "trace_id": "70bdd52aa10642cab187da0402727af2"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:13.992995+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "205f4b7b65574b1abaf2b0b15088ef16", "trace_id": "205f4b7b65574b1abaf2b0b15088ef16"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:14.908199+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "7625f6ca64f64f61a3e1f293fea3b71d", "trace_id": "7625f6ca64f64f61a3e1f293fea3b71d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:14.951891+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "9cb350d3060546dc8b91d87de681cf7d", "trace_id": "9cb350d3060546dc8b91d87de681cf7d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:14.972559+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "782b0ae9f93444d6ac730c862dfeffa8", "trace_id": "782b0ae9f93444d6ac730c862dfeffa8"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:15.915907+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "d9e48dfb2b044b1c930f40cae29a74b4", "trace_id": "d9e48dfb2b044b1c930f40cae29a74b4"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:15.956964+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "9708be2d706340009b237c8a4060f6ed", "trace_id": "9708be2d706340009b237c8a4060f6ed"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:15.981522+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "9ade4d0adf95469dbf6f29a91082bcd2", "trace_id": "9ade4d0adf95469dbf6f29a91082bcd2"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:16.769473+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "8013ead03b24416a8d63ca5874a5a315", "trace_id": "8013ead03b24416a8d63ca5874a5a315"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:16.912388+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "b73a8198a3754105a551aaa82ea0ceff", "trace_id": "b73a8198a3754105a551aaa82ea0ceff"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:16.931076+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "eb84380012714a45b41469edc521f5af", "trace_id": "eb84380012714a45b41469edc521f5af"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:16.952807+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "a83324ddbe11415eb1bd42bdaa651e50", "trace_id": "a83324ddbe11415eb1bd42bdaa651e50"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:17.926300+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "66dc7370343a4ef388111a706683542e", "trace_id": "66dc7370343a4ef388111a706683542e"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:17.978119+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "b04f6214aa6a4c8db8214f32d606ce9d", "trace_id": "b04f6214aa6a4c8db8214f32d606ce9d"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:18.008372+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "8f4b5394eef44f15b55af6e7819700f1", "trace_id": "8f4b5394eef44f15b55af6e7819700f1"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:18.935093+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "d6e03e326506473b896b313cc1a6efbd", "trace_id": "d6e03e326506473b896b313cc1a6efbd"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:18.978416+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "e77f6a99f5404135a90d1c6349365c9a", "trace_id": "e77f6a99f5404135a90d1c6349365c9a"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:18.999050+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "ab4dbde8dd0542b0bdc97044de792790", "trace_id": "ab4dbde8dd0542b0bdc97044de792790"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:19.961562+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "be0b6f087a2e4ecca86b778a498089d6", "trace_id": "be0b6f087a2e4ecca86b778a498089d6"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:19.994380+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "f7e84220c9de410ab2c389ca9009024f", "trace_id": "f7e84220c9de410ab2c389ca9009024f"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+{"timestamp": "2026-11-13T10:12:20.017190+00:00", "level": "WARNING", "logger": "slowapi", "message": "ratelimit 60 per 1 minute (127.0.0.1) exceeded at endpoint: /api/audit-log", "request_id": "db1b8af68b7a4aa2a52b77545b858e75", "trace_id": "db1b8af68b7a4aa2a52b77545b858e75"}
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 429 Too Many Requests
+INFO:     127.0.0.1:61063 - "GET /api/audit-log?limit=100 HTTP/1.1" 200 OK
