@@ -709,10 +709,10 @@ export function SettingsView() {
                       variant="outline"
                       className={cn(
                         'text-[10px]',
-                        bappebti?.status ?? 'UNKNOWN' === 'REGISTERED' && 'text-bull border-bull',
-                        bappebti?.status ?? 'UNKNOWN' === 'PENDING' && 'text-warn border-warn',
-                        bappebti?.status ?? 'UNKNOWN' === 'NOT_REGISTERED' && 'text-bear border-bear',
-                        bappebti?.status ?? 'UNKNOWN' === 'UNKNOWN' && 'text-muted-foreground',
+                        (bappebti?.status ?? 'UNKNOWN') === 'REGISTERED' && 'text-bull border-bull',
+                        (bappebti?.status ?? 'UNKNOWN') === 'PENDING' && 'text-warn border-warn',
+                        (bappebti?.status ?? 'UNKNOWN') === 'NOT_REGISTERED' && 'text-bear border-bear',
+                        (bappebti?.status ?? 'UNKNOWN') === 'UNKNOWN' && 'text-muted-foreground',
                       )}
                     >
                       {bappebti?.status ?? 'UNKNOWN'}
