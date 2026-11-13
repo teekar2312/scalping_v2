@@ -142,7 +142,16 @@ export function MarketAnalysisView() {
   const currencies = Array.isArray(strength?.currencies) ? strength!.currencies : [];
   const volLevels = Array.isArray(volProfile?.levels) ? volProfile!.levels : [];
   const corrPairs = Array.isArray(correlation?.pairs) ? correlation!.pairs : [];
-  const corrMatrix = Array.isArray(correlation?.matrix) ? correlation!.matrix : [];
+  // Correlation matrix: backend may return dict {EURUSD: {EURUSD: 1, ...}} or 2D array
+  const corrMatrix: number[][] = (() => {
+    const m = correlation?.matrix as any;
+    if (Array.isArray(m)) return m as number[][];
+    if (m && typeof m === 'object') {
+      // Convert dict-of-dicts to 2D array
+      return corrPairs.map((row) => corrPairs.map((col) => Number(m?.[row]?.[col] ?? 0)));
+    }
+    return [];
+  })();
   const volTenors = Array.isArray(volSurface?.tenors) ? volSurface!.tenors : [];
   const orderFlowLevels = Array.isArray(orderFlow?.levels) ? orderFlow!.levels : [];
   const sentimentItems = Array.isArray(sentiment?.items) ? sentiment!.items : [];
@@ -627,7 +636,7 @@ function CorrelationHeatmap({ pairs, matrix }: { pairs: string[]; matrix: number
             <tr key={row}>
               <td className="p-1 font-medium text-muted-foreground whitespace-nowrap">{row}</td>
               {pairs.map((col, j) => {
-                const v = matrix[i][j];
+                const v = matrix?.[i]?.[j] ?? 0;
                 const textColor = Math.abs(v) > 0.5 ? 'text-white' : 'text-foreground';
                 return (
                   <td
