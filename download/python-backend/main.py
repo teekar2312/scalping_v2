@@ -1433,9 +1433,10 @@ async def check_ntp_sync() -> dict[str, Any]:
         import ntplib  # type: ignore
         client = ntplib.NTPClient()
         resp = client.request("pool.ntp.org", version=3, timeout=3.0)
-        ntp_time_iso = datetime.fromtimestamp(resp.tx_timestamp,
+        # Use resp.tx_time (Unix timestamp) NOT resp.tx_timestamp (NTP epoch since 1900)
+        ntp_time_iso = datetime.fromtimestamp(resp.tx_time,
                                               tz=timezone.utc).isoformat()
-        drift_seconds = abs(server_time.timestamp() - resp.tx_timestamp)
+        drift_seconds = abs(server_time.timestamp() - resp.tx_time)
         if drift_seconds > cfg.NTP_DRIFT_TOLERANCE_S:
             ok = False
             logger.warning("NTP drift > %.1fs: %.2fs",
