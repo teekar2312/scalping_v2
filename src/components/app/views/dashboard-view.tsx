@@ -820,8 +820,8 @@ function DashboardViewInner() {
             </div>
             <ScrollArea className="h-20">
               <div className="flex flex-col gap-1">
-                {todayHighNews.map((n) => (
-                  <div key={n.id} className="flex items-center gap-2 text-xs">
+                {todayHighNews.map((n, idx) => (
+                  <div key={`${n.id ?? n.title}-${idx}`} className="flex items-center gap-2 text-xs">
                     <AlertTriangle className="h-3 w-3 text-bear" />
                     <span className="font-medium">{n.title}</span>
                     <span className="ml-auto text-muted-foreground tabular-nums">
@@ -997,8 +997,8 @@ function DashboardViewInner() {
           >
             <div className="pt-3">
               <div className="flex flex-col gap-1.5">
-                {news.slice(0, 6).map((n) => (
-                  <div key={n.id} className="flex items-center gap-2 text-xs">
+                {news.slice(0, 6).map((n, idx) => (
+                  <div key={`${n.id ?? n.title}-${idx}`} className="flex items-center gap-2 text-xs">
                     <Badge
                       variant="outline"
                       className={cn(

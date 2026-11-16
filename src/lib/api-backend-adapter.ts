@@ -390,7 +390,7 @@ export function transformNewsEvent(raw: unknown): NewsEvent {
   }
 
   return {
-    id: asStr(r.id ?? r._id, `news-${Date.now()}`),
+    id: asStr(r.id ?? r._id, `news-${eventTime}-${symbol}`),
     ticker: symbol,
     title: asStr(r.title ?? r.event ?? r.headline, ''),
     impact,
