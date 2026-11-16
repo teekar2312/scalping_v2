@@ -274,7 +274,7 @@ export const EMOTIONAL_STATES = [
 ] as const;
 
 // Audit event types with display color tokens
-export type AuditColorToken = 'info' | 'bull' | 'bear' | 'warn';
+export type AuditColorToken = 'info' | 'bull' | 'bear' | 'warn' | 'muted';
 
 export const AUDIT_EVENT_TYPES: { value: string; label: string; color: AuditColorToken }[] = [
   { value: 'SIGNAL', label: 'Signal', color: 'info' },
@@ -283,12 +283,29 @@ export const AUDIT_EVENT_TYPES: { value: string; label: string; color: AuditColo
   { value: 'TP2_HIT', label: 'TP2 Hit', color: 'bull' },
   { value: 'SL_HIT', label: 'SL Hit', color: 'bear' },
   { value: 'KILL_SWITCH', label: 'Kill Switch', color: 'bear' },
+  { value: 'KILL_SWITCH_RELEASED', label: 'Kill Released', color: 'info' },
   { value: 'RISK_GATE_BLOCKED', label: 'Risk Gate Blocked', color: 'warn' },
   { value: 'AI_REJECTED', label: 'AI Rejected', color: 'warn' },
   { value: 'CONNECTION_LOST', label: 'Connection Lost', color: 'bear' },
   { value: 'RECOVERY', label: 'Recovery', color: 'info' },
   { value: 'COOLDOWN_ENGAGED', label: 'Cooldown', color: 'warn' },
   { value: 'MARGIN_WARNING', label: 'Margin Warning', color: 'bear' },
+  { value: 'MARGIN_CALL_PREVENTED', label: 'Margin Call Prevented', color: 'bear' },
+  { value: 'ENGINE_STARTED', label: 'Engine Started', color: 'bull' },
+  { value: 'ENGINE_STOPPED', label: 'Engine Stopped', color: 'warn' },
+  { value: 'SCAN_START', label: 'Scan Start', color: 'info' },
+  { value: 'SCAN_COMPLETE', label: 'Scan Complete', color: 'info' },
+  { value: 'PAIR_SKIP', label: 'Pair Skip', color: 'muted' },
+  { value: 'SESSION_SKIP', label: 'Session Skip', color: 'muted' },
+  { value: 'ADX_SKIP', label: 'ADX Skip', color: 'muted' },
+  { value: 'NEWS_BLACKOUT', label: 'News Blackout', color: 'warn' },
+  { value: 'RR_TOO_LOW', label: 'RR Too Low', color: 'warn' },
+  { value: 'NO_SETUP', label: 'No Setup', color: 'muted' },
+  { value: 'DRAWDOWN_ALERT', label: 'Drawdown Alert', color: 'warn' },
+  { value: 'STREAK_COOLDOWN', label: 'Streak Cooldown', color: 'warn' },
+  { value: 'WEEKEND_CLOSE', label: 'Weekend Close', color: 'warn' },
+  { value: 'NEWS_REDUCE', label: 'News Reduce', color: 'warn' },
+  { value: 'TEST', label: 'Test', color: 'info' },
 ];
 
 export const AUDIT_SEVERITIES: { value: string; label: string; color: AuditColorToken }[] = [

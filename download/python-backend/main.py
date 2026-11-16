@@ -1196,6 +1196,24 @@ async def api_audit_log(request: Request,
 # Sprint 6 #10: audit chain verification
 # --------------------------------------------------------------------------- #
 
+@app.post("/api/audit-log/test",
+          tags=["system"],
+          summary="Insert test audit entry (verify persistence works)",
+          responses={200: {"description": "Test entry inserted"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("5/minute")
+async def api_audit_log_test(request: Request,
+                             _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
+    """Insert a test audit entry to verify the audit log pipeline works."""
+    from database import insert_audit_log
+    row_id = insert_audit_log(
+        event_type="TEST",
+        symbol="TEST",
+        detail={"message": "Manual test entry — audit log pipeline is working"},
+        severity="INFO",
+    )
+    return {"ok": True, "id": row_id, "message": "Test entry inserted — check Audit Log view"}
+
 @app.get("/api/audit-log/verify",
          tags=["system"],
          summary="Verify audit hash chain",

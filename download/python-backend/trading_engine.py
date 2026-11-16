@@ -123,7 +123,8 @@ class EventBus:
         try:
             self._persist_audit(event)
         except Exception as exc:  # pragma: no cover
-            logger.debug("audit persist failed: %s", exc)
+            logger.warning("⚠ audit persist FAILED for event '%s': %s",
+                           event.get("type", "unknown"), exc)
         # Forward to Telegram (best-effort)
         try:
             from notifications import get_notification_manager
