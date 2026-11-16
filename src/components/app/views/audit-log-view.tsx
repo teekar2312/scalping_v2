@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ScrollText,
   RefreshCw,
@@ -192,16 +192,20 @@ export function AuditLogView() {
     fetchEntries();
   }, [fetchEntries]);
 
-  // Auto-refresh every 5s when enabled
+  // Auto-refresh every 10s when enabled
   useEffect(() => {
     if (!autoRefresh) return;
-    const id = setInterval(fetchEntries, 5000);
+    const id = setInterval(fetchEntries, 10000);
     return () => clearInterval(id);
   }, [autoRefresh, fetchEntries]);
 
-  // Re-fetch on WebSocket refresh signal (any WS event bumps the counter)
+  // Re-fetch on WebSocket refresh signal (debounced — max 1 per 10s)
+  const lastWsFetchRef = useRef(0);
   useEffect(() => {
     if (auditLogRefresh === 0) return;
+    const now = Date.now();
+    if (now - lastWsFetchRef.current < 10000) return; // debounce 10s
+    lastWsFetchRef.current = now;
     fetchEntries();
   }, [auditLogRefresh, fetchEntries]);
 
