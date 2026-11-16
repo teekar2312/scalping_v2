@@ -567,14 +567,14 @@ function AutoTuneCard() {
         <div className="rounded-md border bg-muted/40 p-2">
           <div className="text-[11px] font-semibold mb-1">Current Optimal Params</div>
           <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px]">
-            <div className="flex justify-between"><span className="text-muted-foreground">risk_pct</span><span className="font-mono">{(optimal.risk_pct_per_trade * 100).toFixed(2)}%</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">max_pos</span><span className="font-mono">{optimal.max_positions}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">rr_min</span><span className="font-mono">{optimal.rr_net_min.toFixed(2)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">tp1_mult</span><span className="font-mono">{optimal.tp1_mult.toFixed(1)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">tp2_mult</span><span className="font-mono">{optimal.tp2_mult.toFixed(1)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">sl_atr</span><span className="font-mono">{optimal.sl_atr_mult.toFixed(1)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">trailing_atr</span><span className="font-mono">{optimal.trailing_atr_mult.toFixed(1)}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">adx_trend</span><span className="font-mono">{optimal.adx_trending_threshold}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">risk_pct</span><span className="font-mono">{((optimal.risk_pct_per_trade ?? 0.01) * 100).toFixed(2)}%</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">max_pos</span><span className="font-mono">{optimal.max_positions ?? 3}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">rr_min</span><span className="font-mono">{(optimal.rr_net_min ?? 2.0).toFixed(2)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">tp1_mult</span><span className="font-mono">{(optimal.tp1_mult ?? 2.0).toFixed(1)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">tp2_mult</span><span className="font-mono">{(optimal.tp2_mult ?? 4.0).toFixed(1)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">sl_atr</span><span className="font-mono">{(optimal.sl_atr_mult ?? 1.5).toFixed(1)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">trailing_atr</span><span className="font-mono">{(optimal.trailing_atr_mult ?? 2.0).toFixed(1)}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">adx_trend</span><span className="font-mono">{optimal.adx_trending_threshold ?? 25}</span></div>
           </div>
         </div>
       )}
