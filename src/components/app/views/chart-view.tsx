@@ -179,25 +179,36 @@ export function ChartView() {
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
         <div className="text-sm font-semibold text-bear">Chart Error: {activeSymbol}</div>
         <div className="text-xs text-muted-foreground max-w-md text-center">{chartError}</div>
-        <div className="text-xs text-muted-foreground mt-2">
-          Pastikan backend sudah di-restart dengan kode terbaru:
-          <pre className="mt-2 p-2 bg-muted rounded text-[10px] font-mono">cd download\python-backend
-.\run.bat</pre>
-        </div>
-        <button
-          className="mt-2 rounded-md border px-3 py-1 text-xs hover:bg-accent"
-          onClick={() => { setChartError(null); setChartData(null); }}
-        >
-          Retry
-        </button>
+        <button className="mt-2 rounded-md border px-3 py-1 text-xs hover:bg-accent" onClick={() => { setChartError(null); setChartData(null); }}>Retry</button>
       </div>
     );
   }
 
-  if (loading || !chartData || !latest) {
+  if (loading || !chartData) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="text-sm text-muted-foreground">Memuat chart {activeSymbol}...</div>
+      </div>
+    );
+  }
+
+  // Handle empty candles — show info instead of blank chart
+  if (!latest || chartRows.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6">
+        <div className="text-sm font-semibold text-warn">No candle data for {activeSymbol}</div>
+        <div className="text-xs text-muted-foreground max-w-md text-center">
+          Backend returned {chartData.candles?.length ?? 0} candles.
+          Possible causes: market closed (weekend/holiday), symbol not in Market Watch,
+          or broker uses different symbol name.
+        </div>
+        <div className="text-xs text-muted-foreground mt-2">
+          Check MT5 terminal → Market Watch → ensure {activeSymbol} is listed.
+          <br />Try: <button className="underline" onClick={() => { setChartData(null); }}>Reload</button>
+        </div>
+        <div className="mt-3 text-[10px] font-mono text-muted-foreground bg-muted p-2 rounded">
+          Debug: symbol={chartData.symbol} candles={chartData.candles?.length} timeframe={chartData.timeframe}
+        </div>
       </div>
     );
   }
@@ -346,7 +357,7 @@ export function ChartView() {
       {/* Main chart */}
       <PanelCard
         title={`${activeSymbol} · ${timeframe}`}
-        subtitle="Candlestick + EMA9/21 + VWAP + Bollinger Bands"
+        subtitle={`Candlestick + EMA9/21 + VWAP + Bollinger Bands · ${chartRows.length} candles`}
         icon={CandlestickChart}
         bodyClassName="h-[420px]"
       >
