@@ -90,8 +90,8 @@ class TiingoCalendar:
             ``None`` for all.
         """
         if not self.api_key:
-            logger.warning("Tiingo API key not set - returning empty calendar.")
-            return []
+            logger.info("Tiingo API key not set — using V2 static weekly template.")
+            return self._static_fallback(days_ahead, impact)
 
         # Cache hit?
         now = time.time()
@@ -100,6 +100,10 @@ class TiingoCalendar:
             events = self._cache.events
         else:
             events = await self._fetch_remote(days_ahead)
+            if not events:
+                # Tiingo returned empty — use static fallback
+                logger.info("Tiingo returned 0 events — using V2 static fallback.")
+                events = self._static_fallback(days_ahead, impact)
             self._cache = CachedCalendar(events=events, fetched_at=now)
             # Persist to DB
             try:
@@ -111,6 +115,54 @@ class TiingoCalendar:
         # Filter
         if impact:
             return [e for e in events if e.get("impact", "").upper() == impact.upper()]
+        return events
+
+    def _static_fallback(self, days_ahead: int,
+                         impact: str | None = None) -> list[dict[str, Any]]:
+        """Generate V2 weekly news template events for the next N days.
+
+        Based on Kalender_Trading_Scalping_V2.pdf — recurring weekly events:
+        - Mon 19:00 WIB: ECB Speech (Lagarde) — MED
+        - Tue 19:00 WIB: EZ CPI Flash — MED
+        - Wed 20:30 WIB: US CPI — HIGH
+        - Thu 20:30 WIB: ECB Rate Decision — HIGH
+        - Fri 20:30 WIB: NFP — HIGH
+        """
+        from datetime import timedelta
+        WIB = timezone(timedelta(hours=7))
+        now_wib = datetime.now(WIB)
+        events: list[dict[str, Any]] = []
+        # (weekday, hour, minute, title, currency, impact, detail)
+        templates = [
+            (0, 19, 0, "ECB Speech — Lagarde", "EUR", "MED", "Lagarde speech — EUR volatility"),
+            (1, 19, 0, "EZ CPI Flash y/y", "EUR", "MED", "Inflasi Eurozone — EUR sensitive"),
+            (2, 20, 30, "US CPI m/m", "USD", "HIGH", "Inflasi US — USD volatility besar"),
+            (3, 20, 30, "ECB Rate Decision", "EUR", "HIGH", "+ Press Conf 20:45 — EUR spike"),
+            (4, 20, 30, "NFP (Non-Farm Payrolls)", "USD", "HIGH", "Jumat pertama bulan — USD besar"),
+        ]
+        for day_offset in range(days_ahead + 1):
+            date = now_wib + timedelta(days=day_offset)
+            for wd, hr, mn, title, ccy, imp, detail in templates:
+                if date.weekday() != wd:
+                    continue
+                event_time = date.replace(hour=hr, minute=mn, second=0, microsecond=0)
+                if event_time < now_wib:
+                    continue  # past event
+                events.append({
+                    "symbol": ccy,
+                    "title": title,
+                    "impact": imp,
+                    "country": "Eurozone" if ccy == "EUR" else "United States",
+                    "currency": ccy,
+                    "event_time": event_time.isoformat(),
+                    "actual": None,
+                    "forecast": None,
+                    "previous": None,
+                    "source": "v2-static-template",
+                })
+        if impact:
+            events = [e for e in events if e["impact"].upper() == impact.upper()]
+        logger.info("Static fallback generated %d events for next %d days", len(events), days_ahead)
         return events
 
     async def _fetch_remote(self, days_ahead: int) -> list[dict[str, Any]]:

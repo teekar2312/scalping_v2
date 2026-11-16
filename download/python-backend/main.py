@@ -1901,8 +1901,16 @@ async def api_test_ollama(request: Request,
 @limiter.limit("10/minute")
 async def api_test_tiingo(request: Request,
                           _auth: dict = Depends(get_api_key)) -> dict[str, Any]:
-    """Probe Tiingo (fetch 1 HIGH event)."""
+    """Probe Tiingo — returns detailed diagnostics."""
     t0 = asyncio.get_event_loop().time()
+    api_key = settings.tiingo.api_key
+    if not api_key:
+        return {"ok": False,
+                "message": "TIINGO_API_KEY not set in .env — get free key at https://api.tiingo.com",
+                "latency_ms": 0.0,
+                "api_key_set": False,
+                "endpoint": settings.tiingo.calendar_endpoint,
+                "note": "Economic calendar requires Tiingo Fundamentals subscription ($10/month). Free tier only includes IEX stock data. Bot works without Tiingo — just no news blackout protection."}
     try:
         cal = get_calendar()
         events = await cal.fetch_calendar(days_ahead=3, impact="HIGH")
@@ -1910,11 +1918,18 @@ async def api_test_tiingo(request: Request,
         if events:
             return {"ok": True,
                     "message": f"got {len(events)} HIGH events",
-                    "latency_ms": round(elapsed, 1)}
-        return {"ok": False, "message": "no events returned",
-                "latency_ms": round(elapsed, 1)}
+                    "latency_ms": round(elapsed, 1),
+                    "api_key_set": True,
+                    "endpoint": settings.tiingo.calendar_endpoint}
+        return {"ok": False,
+                "message": "no events returned — check if your Tiingo subscription includes Fundamentals (economic calendar)",
+                "latency_ms": round(elapsed, 1),
+                "api_key_set": True,
+                "endpoint": settings.tiingo.calendar_endpoint,
+                "note": "Free Tiingo tier does NOT include /tiingo/fundamentals/news-calendar. Upgrade to Fundamentals ($10/month) or use static fallback."}
     except Exception as exc:
-        return {"ok": False, "message": str(exc), "latency_ms": 0.0}
+        return {"ok": False, "message": str(exc), "latency_ms": 0.0,
+                "api_key_set": True, "endpoint": settings.tiingo.calendar_endpoint}
 
 
 # --------------------------------------------------------------------------- #
