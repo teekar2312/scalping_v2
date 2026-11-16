@@ -85,10 +85,85 @@ function parseDetail(entry: AuditLogEntry): Record<string, unknown> | null {
   return null;
 }
 
+/** Human-readable summary for each audit event type. */
+function formatAuditSummary(eventType: string, detail: Record<string, unknown> | null, symbol?: string): string {
+  if (!detail) return '—';
+  const d = detail as Record<string, any>;
+  const sym = symbol || d.symbol || '';
+  const reason = d.reason || '';
+
+  switch (eventType) {
+    case 'SIGNAL':
+      return `${d.direction || '—'} ${sym} — ADX ${d.adx ?? '?'}, RR ${d.rr_net ?? '?'}, ${d.regime || '?'}, ${d.session || '?'}`;
+    case 'ORDER_PLACED':
+      return `${d.direction || ''} ${(d.lot || d.volume || '?')} lot ${sym} @ ${d.entry_price || d.fill_price || '?'}, SL ${d.sl || '?'}, TP ${d.tp || d.tp1 || '?'}`;
+    case 'TP1_HIT':
+      return `${sym} TP1 tercapai — pindah SL ke break-even, close 50%`;
+    case 'TP2_HIT':
+      return `${sym} TP2 tercapai — close 30%, mulai trailing`;
+    case 'SL_HIT':
+      return `${sym} SL tersentuh — loss ${d.profit ?? '?'}`;
+    case 'KILL_SWITCH':
+      return `KILL SWITCH aktif: ${reason || d.reason || 'manual'}`;
+    case 'KILL_SWITCH_RELEASED':
+      return 'Kill switch dilepas — bot siap restart';
+    case 'RISK_GATE_BLOCKED':
+      return `Entry diblokir: ${(d.reasons ? Array.isArray(d.reasons) ? d.reasons.join(', ') : d.reasons : reason)}`;
+    case 'AI_REJECTED':
+      return `AI reject: ${d.suggestion || reason}`;
+    case 'CONNECTION_LOST':
+      return `Koneksi ${d.service || 'MT5'} terputus: ${reason}`;
+    case 'RECOVERY':
+      return `Recovery: ${d.recovered || 0} recovered, ${d.closed_offline || 0} closed offline`;
+    case 'COOLDOWN_ENGAGED':
+      return `Cooldown sampai ${d.cooldown_until || '?'} — ${reason || '2 loss beruntun'}`;
+    case 'MARGIN_WARNING':
+      return `Margin level rendah: ${d.level || d.margin_level || '?'}%`;
+    case 'MARGIN_CALL_PREVENTED':
+      return `Auto-close posisi terburuk — margin level ${d.level || '?'}%`;
+    case 'ENGINE_STARTED':
+      return `Bot started — mode: ${d.paper_mode ? 'PAPER' : 'LIVE'}, dry_run: ${d.dry_run || false}`;
+    case 'ENGINE_STOPPED':
+      return `Bot stopped — ${reason}`;
+    case 'SCAN_START':
+      return `Mulai scan ${d.pairs || 'all pairs'} — balance ${d.balance || '?'}`;
+    case 'SCAN_COMPLETE':
+      return `Scan selesai — ${d.signals || 0} sinyal, ${d.duration_ms || '?'}ms`;
+    case 'PAIR_SKIP':
+      return `${sym} di-skip: ${reason}`;
+    case 'SESSION_SKIP':
+      return `${sym} di-skip — di luar jam trading (14:00-17:00 & 20:00-22:00 WIB)`;
+    case 'ADX_SKIP':
+      return `${sym} di-skip — ADX < 25 (market ranging)`;
+    case 'NEWS_BLACKOUT':
+      return `${sym} di-skip — ±30 menit dari news HIGH impact`;
+    case 'RR_TOO_LOW':
+      return `${sym} di-skip — RR net < 2.0 (biaya transaksi terlalu tinggi)`;
+    case 'NO_SETUP':
+      return `${sym} — tidak ada setup valid (checklist tidak pass)`;
+    case 'DRAWDOWN_ALERT':
+      return `Drawdown ${d.current_dd || '?'}% — mendekati hard stop`;
+    case 'STREAK_COOLDOWN':
+      return `Cooldown ${d.consecutive_losses || '?'} loss beruntun — tutup 30 menit`;
+    case 'WEEKEND_CLOSE':
+      return 'Jumat 21:30 WIB — close semua posisi sebelum weekend';
+    case 'NEWS_REDUCE':
+      return `${sym} — reduce 50% posisi sebelum news HIGH`;
+    case 'TEST':
+      return d.message || 'Test entry — audit pipeline works';
+    default:
+      // Generic: show key fields
+      const keys = Object.keys(d).filter(k => !['ts', 'type'].includes(k));
+      if (keys.length === 0) return '—';
+      return keys.slice(0, 4).map(k => `${k}: ${d[k]}`).join(' | ');
+  }
+}
+
 function AuditRow({ entry, idx }: { entry: AuditLogEntry; idx: number }) {
   const [expanded, setExpanded] = useState(false);
   const detail = useMemo(() => parseDetail(entry), [entry]);
-  const detailStr = useMemo(() => (detail ? JSON.stringify(detail) : ''), [detail]);
+  const summary = useMemo(() => formatAuditSummary(entry.event_type, detail, entry.symbol ?? undefined), [entry.event_type, detail, entry.symbol]);
+  const detailStr = useMemo(() => (detail ? JSON.stringify(detail, null, 2) : ''), [detail]);
   const { date, time } = formatTimestamp(entry.timestamp);
   const evColor = findEventColor(entry.event_type);
   const sevColor = findSeverityColor(entry.severity);
@@ -119,8 +194,8 @@ function AuditRow({ entry, idx }: { entry: AuditLogEntry; idx: number }) {
         </td>
         <td className="px-2 tabular-nums text-xs">{entry.symbol ?? '—'}</td>
         <td className="px-2 tabular-nums text-xs">{entry.ticket ?? '—'}</td>
-        <td className="px-2 text-[10px] text-muted-foreground max-w-[280px] truncate">
-          {detailStr || <span className="opacity-50">— no detail —</span>}
+        <td className="px-2 text-[10px] max-w-[280px] truncate" title={summary}>
+          {summary || <span className="opacity-50">—</span>}
         </td>
         <td className="px-2 text-right text-[10px] font-mono tabular-nums text-muted-foreground">
           <TooltipProvider delayDuration={200}>
@@ -138,17 +213,20 @@ function AuditRow({ entry, idx }: { entry: AuditLogEntry; idx: number }) {
           </TooltipProvider>
         </td>
         <td className="px-2 text-right">
-          {detailStr ? (
+          {summary !== '—' ? (
             expanded ? <ChevronDown className="h-3 w-3 inline" /> : <ChevronRight className="h-3 w-3 inline" />
           ) : null}
         </td>
       </tr>
-      {expanded && detailStr && (
+      {expanded && summary !== '—' && (
         <tr className="bg-muted/20">
           <td colSpan={9} className="px-4 py-2">
-            <pre className="text-[10px] font-mono whitespace-pre-wrap break-all">
-              {JSON.stringify(detail, null, 2)}
-            </pre>
+            <div className="text-xs mb-1 font-semibold text-foreground">{summary}</div>
+            {detailStr && detailStr !== '{}' && (
+              <pre className="text-[10px] font-mono whitespace-pre-wrap break-all text-muted-foreground mt-1">
+                {detailStr}
+              </pre>
+            )}
           </td>
         </tr>
       )}
