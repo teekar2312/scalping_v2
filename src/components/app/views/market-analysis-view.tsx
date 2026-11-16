@@ -491,9 +491,9 @@ export function MarketAnalysisView() {
         <div className="pt-3">
           {sentiment && (
             <div className="flex flex-col gap-1.5">
-              {sentimentItems.map((item) => (
+              {sentimentItems.map((item, idx) => (
                 <div
-                  key={item.id}
+                  key={`${item.id ?? item.title}-${idx}`}
                   className="flex items-start gap-2 rounded-md border p-2 text-xs"
                 >
                   <Badge
