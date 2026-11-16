@@ -61,6 +61,7 @@ _EVENT_AUDIT_MAP: dict[str, tuple[str, str]] = {
     "tp2_hit": ("TP2_HIT", "INFO"),
     "position_closed": ("SL_HIT", "INFO"),
     "kill_switch_engaged": ("KILL_SWITCH", "CRITICAL"),
+    "kill_switch_released": ("KILL_SWITCH_RELEASED", "INFO"),
     "risk_gate_blocked": ("RISK_GATE_BLOCKED", "WARN"),
     "ai_rejected": ("AI_REJECTED", "INFO"),
     "connection_lost": ("CONNECTION_LOST", "ERROR"),
@@ -71,6 +72,18 @@ _EVENT_AUDIT_MAP: dict[str, tuple[str, str]] = {
     "margin_emergency": ("MARGIN_EMERGENCY", "CRITICAL"),
     "weekend_close": ("WEEKEND_CLOSE", "WARN"),
     "news_reduce": ("NEWS_REDUCE", "WARN"),
+    "engine_started": ("ENGINE_STARTED", "INFO"),
+    "engine_stopped": ("ENGINE_STOPPED", "INFO"),
+    "scan_start": ("SCAN_START", "INFO"),
+    "scan_complete": ("SCAN_COMPLETE", "INFO"),
+    "pair_skip": ("PAIR_SKIP", "INFO"),
+    "session_skip": ("SESSION_SKIP", "INFO"),
+    "adx_skip": ("ADX_SKIP", "INFO"),
+    "news_blackout": ("NEWS_BLACKOUT", "INFO"),
+    "rr_too_low": ("RR_TOO_LOW", "INFO"),
+    "no_setup": ("NO_SETUP", "INFO"),
+    "drawdown_alert": ("DRAWDOWN_ALERT", "WARN"),
+    "streak_cooldown": ("STREAK_COOLDOWN", "WARN"),
 }
 
 
@@ -122,12 +135,16 @@ class EventBus:
 
     @staticmethod
     def _persist_audit(event: dict[str, Any]) -> None:
-        """Write the event to the AuditLog table (if mapped)."""
+        """Write the event to the AuditLog table — ALL events are persisted."""
         event_type = event.get("type") or ""
+        # Use mapped type+severity, or default for unmapped events
         mapped = _EVENT_AUDIT_MAP.get(event_type)
-        if mapped is None:
-            return
-        audit_type, severity = mapped
+        if mapped is not None:
+            audit_type, severity = mapped
+        else:
+            # Persist unmapped events too — don't silently drop them
+            audit_type = event_type.upper().replace(" ", "_") or "UNKNOWN"
+            severity = "INFO"
         symbol = event.get("symbol")
         ticket = event.get("ticket")
         if ticket is None:
@@ -504,6 +521,8 @@ class TradingEngine:
         candles_m15_raw = await asyncio.to_thread(
             self.connector.get_candles, mt5_sym, "M15", 200)
         if not candles_m5_raw or not candles_m15_raw:
+            await self.bus.publish({"type": "pair_skip", "symbol": pair,
+                "reason": "no candles", "ts": datetime.now(timezone.utc).isoformat()})
             return None
 
         candles_m5 = _candles_from_bars(candles_m5_raw)
@@ -515,6 +534,8 @@ class TradingEngine:
                 self.connector.get_symbol_info, mt5_sym)
         except Exception as exc:  # pragma: no cover
             logger.warning("get_symbol_info(%s) failed: %s", mt5_sym, exc)
+            await self.bus.publish({"type": "pair_skip", "symbol": pair,
+                "reason": f"symbol_info failed: {exc}", "ts": datetime.now(timezone.utc).isoformat()})
             return None
 
         spread_pips = sym_info.spread * sym_info.point / sym_info.pip_size \
@@ -541,7 +562,24 @@ class TradingEngine:
             now_wib=datetime.now(WIB_TZ),
         )
         if ctx is None:
+            await self.bus.publish({"type": "no_setup", "symbol": pair,
+                "reason": "check_setup returned None", "ts": datetime.now(timezone.utc).isoformat()})
             return None
+
+        # Log why setup was rejected (if not all checks passed)
+        if not ctx.pass_all:
+            failed = [k for k, v in ctx.checklist.items() if not v.get("passed", False)]
+            reason_map = {
+                "adx_trending": "ADX_SKIP",
+                "is_session_active": "SESSION_SKIP",
+                "is_news_blackout": "NEWS_BLACKOUT",
+                "rr_net_ok": "RR_TOO_LOW",
+            }
+            for fail in failed:
+                evt_type = reason_map.get(fail, "NO_SETUP")
+                await self.bus.publish({"type": evt_type.lower(), "symbol": pair,
+                    "reason": f"{fail} check failed", "detail": ctx.checklist.get(fail, {}),
+                    "ts": datetime.now(timezone.utc).isoformat()})
 
         # Persist signal
         db.insert_signal(
