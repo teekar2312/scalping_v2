@@ -130,12 +130,12 @@ export function NewsView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((n) => {
+                  {filtered.map((n, idx) => {
                     const eventDate = new Date(n.eventTime);
                     const inBlackout = n.blackoutStart && n.blackoutEnd &&
                       now >= new Date(n.blackoutStart) && now <= new Date(n.blackoutEnd);
                     return (
-                      <tr key={n.id} className={cn(
+                      <tr key={`${n.id ?? n.title}-${idx}`} className={cn(
                         'border-b last:border-0 hover:bg-accent/30',
                         inBlackout && 'bg-bear/5'
                       )}>
