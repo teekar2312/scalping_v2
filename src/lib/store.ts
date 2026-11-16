@@ -21,7 +21,9 @@ export type AppView =
   | 'analytics'
   | 'alerts'
   | 'market'
-  | 'system';
+  | 'system'
+  | 'performance'
+  | 'features';
 
 interface AppStore {
   // Display

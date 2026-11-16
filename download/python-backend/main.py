@@ -206,9 +206,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
         logger.warning("MetaTrader5 package not available - MT5 routes "
                        "will return 503. Run on Windows with MT5 installed.")
+    # BACKEND-FEATURES #6: start Telegram long-poll task (if enabled)
+    telegram_task: asyncio.Task | None = None
+    try:
+        mgr = get_notification_manager()
+        if mgr.enabled and cfg.TELEGRAM_COMMANDS_ENABLED:
+            telegram_task = asyncio.create_task(mgr.start_polling())
+            logger.info("Telegram command polling task started")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Telegram polling task launch failed: %s", exc)
     yield
     # Shutdown
     logger.info("Shutting down backend...")
+    if telegram_task is not None:
+        telegram_task.cancel()
+        try:
+            await telegram_task
+        except (asyncio.CancelledError, Exception):  # pragma: no cover
+            pass
     try:
         engine = get_engine()
         if engine.state.is_running:
@@ -4349,6 +4364,620 @@ async def api_drawdown_realtime(request: Request,
     """Return the current real-time drawdown snapshot."""
     engine = get_engine()
     return engine.get_realtime_drawdown_snapshot()
+
+
+# ============================================================================ #
+# BACKEND-FEATURES (Sprint 10) — 10 new feature endpoints (~25 new routes)
+# ============================================================================ #
+
+# Lazy imports kept inside endpoint functions so a missing optional dep
+# (aiosmtplib / pyttsx3 / sklearn / matplotlib) doesn't crash the FastAPI
+# app at startup.  Each feature module degrades gracefully on its own.
+
+
+# ---- Feature #1: Email daily report --------------------------------------- #
+
+@app.post("/api/reports/send-test",
+          tags=["analytics"],
+          summary="Send a test email",
+          description="Sends a test HTML email via the configured SMTP server "
+                      "(Feature #1).",
+          responses={200: {"description": "Send result"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_reports_send_test(request: Request,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """Send a test email."""
+    from email_report import get_email_reporter
+    reporter = get_email_reporter()
+    ok = await reporter.send_test()
+    return {"ok": ok,
+            "enabled": reporter.enabled,
+            "last_daily_at": (reporter.get_last_daily_at().isoformat()
+                              if reporter.get_last_daily_at() else None)}
+
+
+@app.get("/api/reports/daily",
+         tags=["analytics"],
+         summary="Get last daily report HTML",
+         description="Returns the last rendered daily report as an HTML "
+                     "document (Feature #1).  Use ``text/html`` accept "
+                     "header to render in a browser.",
+         responses={200: {"description": "Daily report HTML"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("20/minute")
+async def api_reports_daily(request: Request,
+                            _auth: dict = Depends(get_api_key)
+                            ) -> Response:
+    """Return the last daily report HTML."""
+    from email_report import get_email_reporter
+    reporter = get_email_reporter()
+    html = reporter.get_last_daily_html()
+    if not html:
+        html = ("<html><body><h1>No daily report yet</h1>"
+                "<p>The 23:00 WIB scheduled report has not run yet.</p>"
+                "</body></html>")
+    return Response(content=html, media_type="text/html")
+
+
+# ---- Feature #2: Performance benchmarking --------------------------------- #
+
+@app.get("/api/analytics/benchmark",
+         tags=["analytics"],
+         summary="Performance benchmark vs. buy-hold + random entries",
+         description="Returns the full benchmark suite: bot vs buy-hold, "
+                     "bot vs random entries, risk-adjusted ratios and "
+                     "Beta/Alpha (Feature #2).",
+         responses={200: {"description": "Benchmark dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_analytics_benchmark(request: Request,
+                                  _auth: dict = Depends(get_api_key),
+                                  start: str | None = None,
+                                  end: str | None = None,
+                                  symbol: str = "ALL"
+                                  ) -> dict[str, Any]:
+    """Full benchmark suite."""
+    from benchmark import get_benchmark
+    from datetime import datetime as _dt
+    trades = list_trades(limit=2000, status="closed")
+    start_dt = (_dt.fromisoformat(start) if start else None)
+    end_dt = (_dt.fromisoformat(end) if end else None)
+    bench = get_benchmark()
+    return bench.benchmark_all(
+        trades=trades,
+        start_date=start_dt,
+        end_date=end_dt,
+        symbol=symbol.upper(),
+    )
+
+
+@app.get("/api/analytics/ratios",
+         tags=["analytics"],
+         summary="Risk-adjusted ratios",
+         description="Returns Sharpe, Sortino, Information, Calmar ratios + "
+                     "max drawdown (Feature #2).",
+         responses={200: {"description": "Ratios dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("20/minute")
+async def api_analytics_ratios(request: Request,
+                               _auth: dict = Depends(get_api_key)
+                               ) -> dict[str, Any]:
+    """Sharpe / Sortino / Calmar / Information ratios + max DD."""
+    from benchmark import get_benchmark
+    trades = list_trades(limit=2000, status="closed")
+    bench = get_benchmark()
+    balance_history = [
+        {"timestamp": s.get("timestamp"),
+         "balance": float(s.get("balance") or 0.0)}
+        for s in list_equity_curve(hours=24 * 30)
+    ]
+    return bench.calculate_ratios(trades, balance_history)
+
+
+# ---- Feature #3: Seasonality ---------------------------------------------- #
+
+@app.get("/api/analytics/seasonality",
+         tags=["analytics"],
+         summary="Trade seasonality analysis",
+         description="Returns win rate / R-net per day-of-week, month, hour, "
+                     "and session (Feature #3).",
+         responses={200: {"description": "Seasonality dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_analytics_seasonality(request: Request,
+                                    _auth: dict = Depends(get_api_key)
+                                    ) -> dict[str, Any]:
+    """Full seasonality analysis."""
+    from seasonality import get_seasonality_analyzer
+    analyzer = get_seasonality_analyzer()
+    return analyzer.analyze_all()
+
+
+@app.get("/api/analytics/seasonality/score",
+         tags=["analytics"],
+         summary="Seasonality score for a date",
+         description="Returns a 0-100 seasonality score for the supplied "
+                     "date (YYYY-MM-DD).  Higher = more favourable to trade "
+                     "(Feature #3).",
+         responses={200: {"description": "Score dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_analytics_seasonality_score(request: Request,
+                                          _auth: dict = Depends(get_api_key),
+                                          date: str = ""
+                                          ) -> dict[str, Any]:
+    """Seasonality score for a given date."""
+    from seasonality import get_seasonality_analyzer
+    from datetime import datetime as _dt
+    analyzer = get_seasonality_analyzer()
+    target = _dt.strptime(date, "%Y-%m-%d").date() if date else None
+    score = analyzer.get_seasonality_score(target)
+    should = analyzer.should_trade_today(target)
+    return {"date": date, "score": score, "should_trade": should}
+
+
+# ---- Feature #4: Auto-parameter tuning ------------------------------------ #
+
+@app.post("/api/auto-tune/optimize",
+          tags=["analytics"],
+          summary="Trigger parameter optimisation",
+          description="Runs the grid-search optimiser over historical trades "
+                      "and persists the best result (Feature #4).",
+          responses={200: {"description": "Optimisation report"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("2/hour")
+async def api_auto_tune_optimize(request: Request,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Trigger optimisation."""
+    from auto_tuner import get_auto_tuner
+    tuner = get_auto_tuner()
+    trades = list_trades(limit=2000, status="closed")
+    report = tuner.optimize_parameters(trades)
+    return {
+        "best": {
+            "params": report.best.params,
+            "profit_factor": report.best.profit_factor,
+            "win_rate": report.best.win_rate,
+            "max_dd": report.best.max_dd,
+            "total_trades": report.best.total_trades,
+            "pnl": report.best.pnl,
+        },
+        "baseline": {
+            "params": report.baseline.params,
+            "profit_factor": report.baseline.profit_factor,
+            "win_rate": report.baseline.win_rate,
+        },
+        "improvement_pct": report.improvement_pct,
+        "grid_size": report.grid_size,
+        "optimized_at": report.optimized_at.isoformat(),
+    }
+
+
+@app.get("/api/auto-tune/current",
+         tags=["analytics"],
+         summary="Current optimal parameters",
+         description="Returns the most recent optimised parameters (Feature #4).",
+         responses={200: {"description": "Optimal params dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_auto_tune_current(request: Request,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """Current optimal params."""
+    from auto_tuner import get_auto_tuner
+    tuner = get_auto_tuner()
+    current = tuner.get_current_optimal()
+    return {"current": current, "should_retrain": tuner.should_retrain()}
+
+
+@app.get("/api/auto-tune/history",
+         tags=["analytics"],
+         summary="Optimisation history",
+         description="Returns past optimisation runs (newest first, Feature #4).",
+         responses={200: {"description": "History list"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("20/minute")
+async def api_auto_tune_history(request: Request,
+                                _auth: dict = Depends(get_api_key),
+                                limit: int = 20
+                                ) -> dict[str, Any]:
+    """Optimisation history."""
+    from auto_tuner import get_auto_tuner
+    tuner = get_auto_tuner()
+    return {"history": tuner.get_optimization_history(limit=limit)}
+
+
+# ---- Feature #5: Voice alerts --------------------------------------------- #
+
+@app.post("/api/voice/test",
+          tags=["system"],
+          summary="Test voice alert",
+          description="Speak a custom text via local TTS (Feature #5).",
+          responses={200: {"description": "Test result"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_voice_test(request: Request,
+                         _auth: dict = Depends(get_api_key),
+                         text: str = "Voice alert test"
+                         ) -> dict[str, Any]:
+    """Test voice."""
+    from voice_alerts import get_voice_alert_manager
+    mgr = get_voice_alert_manager()
+    ok = mgr.test_speak(text)
+    return {"ok": ok, **mgr.status()}
+
+
+@app.get("/api/voice/status",
+         tags=["system"],
+         summary="Voice alert status",
+         description="Returns whether voice alerts are enabled + the last "
+                     "alert text (Feature #5).",
+         responses={200: {"description": "Status dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("60/minute")
+async def api_voice_status(request: Request,
+                           _auth: dict = Depends(get_api_key)
+                           ) -> dict[str, Any]:
+    """Voice status."""
+    from voice_alerts import get_voice_alert_manager
+    mgr = get_voice_alert_manager()
+    return mgr.status()
+
+
+# ---- Feature #6: Telegram remote control ---------------------------------- #
+
+@app.post("/api/telegram/send-command",
+          tags=["system"],
+          summary="Send a command to the bot",
+          description="Execute a Telegram command (/start /stop /kill ...) "
+                      "server-side (Feature #6).  Useful for testing without "
+                      "a Telegram client.",
+          responses={200: {"description": "Reply text"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_telegram_send_command(request: Request,
+                                    _auth: dict = Depends(get_api_key),
+                                    command: str = "/help"
+                                    ) -> dict[str, Any]:
+    """Send a command."""
+    mgr = get_notification_manager()
+    reply = await mgr.handle_command(command)
+    return {"command": command, "reply": reply}
+
+
+@app.get("/api/telegram/commands",
+         tags=["system"],
+         summary="List available Telegram commands",
+         description="Returns the list of Telegram commands supported by "
+                     "the bot (Feature #6).",
+         responses={200: {"description": "Commands list"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("60/minute")
+async def api_telegram_commands(request: Request,
+                                _auth: dict = Depends(get_api_key)
+                                ) -> dict[str, Any]:
+    """List available commands."""
+    from notifications import TELEGRAM_COMMANDS
+    return {"commands": TELEGRAM_COMMANDS,
+            "polling_enabled": cfg.TELEGRAM_COMMANDS_ENABLED}
+
+
+# ---- Feature #7: Trade screenshot capture --------------------------------- #
+
+@app.get("/api/screenshot/{ticket}",
+         tags=["journal"],
+         summary="Get trade screenshot",
+         description="Returns the most recent screenshot PNG for a trade "
+                     "ticket (Feature #7).",
+         responses={200: {"description": "PNG image"},
+                    404: {"description": "No screenshot found"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("60/minute")
+async def api_screenshot_get(request: Request,
+                             ticket: int,
+                             _auth: dict = Depends(get_api_key)
+                             ) -> Response:
+    """Return a screenshot image."""
+    from screenshot import get_screenshot_capture
+    cap = get_screenshot_capture()
+    path = cap.get_screenshot_path(ticket)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404,
+                            detail=f"No screenshot for ticket {ticket}")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.get("/api/screenshots/{ticket}/list",
+         tags=["journal"],
+         summary="List screenshots for a trade",
+         description="Returns all screenshot filenames + sizes for a trade "
+                     "ticket (Feature #7).",
+         responses={200: {"description": "Screenshot list"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("60/minute")
+async def api_screenshots_list(request: Request,
+                               ticket: int,
+                               _auth: dict = Depends(get_api_key)
+                               ) -> dict[str, Any]:
+    """List screenshots for a trade."""
+    from screenshot import get_screenshot_capture
+    cap = get_screenshot_capture()
+    return {"ticket": ticket, "screenshots": cap.list_screenshots(ticket)}
+
+
+@app.post("/api/screenshot/{symbol}/capture",
+          tags=["journal"],
+          summary="Capture a chart screenshot on demand",
+          description="Manually trigger a chart screenshot capture for a "
+                      "symbol (Feature #7).",
+          responses={200: {"description": "Capture result"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_screenshot_capture(request: Request,
+                                 symbol: str,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Capture a screenshot for ``symbol``."""
+    from screenshot import get_screenshot_capture
+    cap = get_screenshot_capture()
+    path = cap.capture_chart(symbol.upper())
+    return {"ok": path is not None, "path": str(path) if path else None}
+
+
+# ---- Feature #8: ML regime detection -------------------------------------- #
+
+@app.post("/api/ml/train",
+          tags=["analytics"],
+          summary="Train the ML regime classifier",
+          description="Triggers training of the Random Forest classifier "
+                      "on historical candles (Feature #8).  Pulls M5 candles "
+                      "for every configured pair from MT5.",
+          responses={200: {"description": "Training report"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("2/hour")
+async def api_ml_train(request: Request,
+                       _auth: dict = Depends(get_api_key)
+                       ) -> dict[str, Any]:
+    """Train the ML regime model."""
+    from ml_regime import get_ml_regime_detector
+    detector = get_ml_regime_detector()
+    historical: list[list[dict]] = []
+    try:
+        from mt5_connector import get_connector, MT5_AVAILABLE
+        if MT5_AVAILABLE and get_connector().connected:
+            for sym in settings.mt5_symbols:
+                bars = get_connector().get_candles(sym, "M5", 500)
+                if bars:
+                    dicts = [b.to_dict() for b in bars]
+                    step = 50
+                    for i in range(0, max(1, len(dicts) - 100), step):
+                        historical.append(dicts[i:i + 100])
+    except Exception as exc:  # pragma: no cover
+        return {"ok": False, "error": str(exc)}
+    if not historical:
+        return {"ok": False,
+                "error": "No historical candles available (MT5 not connected)"}
+    return detector.train(historical)
+
+
+@app.get("/api/ml/predict",
+         tags=["analytics"],
+         summary="Current regime prediction",
+         description="Predict the current market regime for a symbol "
+                     "(Feature #8).  Pulls the latest M5 candles from MT5.",
+         responses={200: {"description": "Prediction dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_ml_predict(request: Request,
+                         _auth: dict = Depends(get_api_key),
+                         symbol: str = "EURUSD"
+                         ) -> dict[str, Any]:
+    """Predict regime for ``symbol``."""
+    from ml_regime import get_ml_regime_detector
+    from mt5_connector import get_connector, MT5_AVAILABLE
+    detector = get_ml_regime_detector()
+    candles: list[dict] = []
+    if MT5_AVAILABLE and get_connector().connected:
+        try:
+            mt5_sym = settings.symbol_for(symbol)
+            bars = get_connector().get_candles(mt5_sym, "M5", 200)
+            candles = [b.to_dict() for b in bars] if bars else []
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "error": str(exc)}
+    if not candles:
+        return {"ok": False, "error": "No candles available for prediction"}
+    return {"ok": True, "symbol": symbol, **detector.predict(candles)}
+
+
+@app.get("/api/ml/features",
+         tags=["analytics"],
+         summary="Feature importance",
+         description="Returns the feature importance dict from the trained "
+                     "Random Forest classifier (Feature #8).",
+         responses={200: {"description": "Importance dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_ml_features(request: Request,
+                          _auth: dict = Depends(get_api_key)
+                          ) -> dict[str, Any]:
+    """Feature importance."""
+    from ml_regime import get_ml_regime_detector
+    detector = get_ml_regime_detector()
+    return detector.get_feature_importance()
+
+
+# ---- Feature #9: News trading mode ---------------------------------------- #
+
+@app.post("/api/news-trading/enable",
+          tags=["news"],
+          summary="Toggle news trading",
+          description="Enable or disable news straddle trading (Feature #9).",
+          responses={200: {"description": "Toggle result"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_news_trading_enable(request: Request,
+                                  _auth: dict = Depends(get_api_key),
+                                  enabled: bool = True
+                                  ) -> dict[str, Any]:
+    """Toggle news trading."""
+    from news_trading import get_news_trading_engine
+    engine = get_news_trading_engine()
+    if enabled:
+        engine.enable()
+    else:
+        engine.disable()
+    return engine.status()
+
+
+@app.get("/api/news-trading/status",
+         tags=["news"],
+         summary="News trading status + upcoming setups",
+         description="Returns whether news trading is enabled + upcoming "
+                     "straddle-eligible HIGH impact news (Feature #9).",
+         responses={200: {"description": "Status dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("20/minute")
+async def api_news_trading_status(request: Request,
+                                  _auth: dict = Depends(get_api_key)
+                                  ) -> dict[str, Any]:
+    """News trading status."""
+    from news_trading import get_news_trading_engine
+    engine = get_news_trading_engine()
+    return engine.status()
+
+
+@app.get("/api/news-trading/stats",
+         tags=["news"],
+         summary="News trading win rate",
+         description="Returns the win rate / P&L of past news straddle trades "
+                     "(Feature #9).",
+         responses={200: {"description": "Stats dict"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("20/minute")
+async def api_news_trading_stats(request: Request,
+                                 _auth: dict = Depends(get_api_key),
+                                 days: int = 30
+                                 ) -> dict[str, Any]:
+    """News trading stats."""
+    from news_trading import get_news_trading_engine
+    engine = get_news_trading_engine()
+    return engine.get_news_trading_stats(days=days)
+
+
+# ---- Feature #10: Multi-account management -------------------------------- #
+
+@app.post("/api/accounts",
+          tags=["system"],
+          summary="Add MT5 account",
+          description="Add a new MT5 account to the multi-account manager "
+                      "(Feature #10).",
+          responses={200: {"description": "Account added"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_accounts_add(request: Request,
+                           _auth: dict = Depends(get_api_key),
+                           name: str = "",
+                           login: int = 0,
+                           password: str = "",
+                           server: str = "",
+                           risk_profile: str = "standard"
+                           ) -> dict[str, Any]:
+    """Add account."""
+    from multi_account import get_multi_account_manager
+    mgr = get_multi_account_manager()
+    if not name or not login or not password or not server:
+        raise HTTPException(status_code=400,
+                            detail="name, login, password, server required")
+    return mgr.add_account(name=name, login=int(login), password=password,
+                           server=server, risk_profile=risk_profile)
+
+
+@app.get("/api/accounts",
+         tags=["system"],
+         summary="List MT5 accounts",
+         description="Returns all configured MT5 accounts + their runtime "
+                     "status (Feature #10).",
+         responses={200: {"description": "Account list"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_accounts_list(request: Request,
+                            _auth: dict = Depends(get_api_key)
+                            ) -> dict[str, Any]:
+    """List accounts."""
+    from multi_account import get_multi_account_manager
+    mgr = get_multi_account_manager()
+    return {"accounts": mgr.list_accounts(), **mgr.status()}
+
+
+@app.delete("/api/accounts/{name}",
+            tags=["system"],
+            summary="Remove MT5 account",
+            description="Remove an MT5 account by name (Feature #10).",
+            responses={200: {"description": "Removed"},
+                       401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_accounts_remove(request: Request,
+                              name: str,
+                              _auth: dict = Depends(get_api_key)
+                              ) -> dict[str, Any]:
+    """Remove account."""
+    from multi_account import get_multi_account_manager
+    mgr = get_multi_account_manager()
+    return mgr.remove_account(name)
+
+
+@app.post("/api/accounts/{name}/start",
+          tags=["system"],
+          summary="Start bot for account",
+          description="Start a TradingEngine bound to ``name`` (Feature #10).",
+          responses={200: {"description": "Start result"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_accounts_start(request: Request,
+                             name: str,
+                             _auth: dict = Depends(get_api_key)
+                             ) -> dict[str, Any]:
+    """Start bot for account."""
+    from multi_account import get_multi_account_manager
+    mgr = get_multi_account_manager()
+    return await mgr.start_bot(name)
+
+
+@app.post("/api/accounts/{name}/stop",
+          tags=["system"],
+          summary="Stop bot for account",
+          description="Stop the bot for ``name`` (Feature #10).",
+          responses={200: {"description": "Stop result"},
+                     401: {"description": "Authentication required"}})
+@limiter.limit("10/minute")
+async def api_accounts_stop(request: Request,
+                            name: str,
+                            _auth: dict = Depends(get_api_key)
+                            ) -> dict[str, Any]:
+    """Stop bot for account."""
+    from multi_account import get_multi_account_manager
+    mgr = get_multi_account_manager()
+    return await mgr.stop_bot(name)
+
+
+@app.get("/api/accounts/aggregate",
+         tags=["system"],
+         summary="Aggregated stats across all accounts",
+         description="Returns combined P&L + position count across all "
+                     "accounts (Feature #10).",
+         responses={200: {"description": "Aggregate stats"},
+                    401: {"description": "Authentication required"}})
+@limiter.limit("30/minute")
+async def api_accounts_aggregate(request: Request,
+                                 _auth: dict = Depends(get_api_key)
+                                 ) -> dict[str, Any]:
+    """Aggregate stats."""
+    from multi_account import get_multi_account_manager
+    mgr = get_multi_account_manager()
+    return mgr.get_aggregated_stats()
 
 
 # --------------------------------------------------------------------------- #

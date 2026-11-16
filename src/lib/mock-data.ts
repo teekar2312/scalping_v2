@@ -70,6 +70,30 @@ import type {
   SwapsReportResponse,
   TickBacktestRequest,
   TickBacktestResult,
+  SendTestEmailResponse,
+  DailyReport,
+  BenchmarkResult,
+  PerformanceRatios,
+  SeasonalityAnalysis,
+  SeasonalityScore,
+  OptimizationResult,
+  OptimizationHistoryEntry,
+  OptimalParams,
+  VoiceTestResult,
+  VoiceStatus,
+  TelegramCommand,
+  TelegramCommandResponse,
+  ScreenshotInfo,
+  ScreenshotListResponse,
+  MLTrainResult,
+  MLPrediction,
+  MLFeatures,
+  NewsTradingStatus,
+  NewsTradingStats,
+  AddAccountRequest,
+  MT5Account,
+  MT5AccountsListResponse,
+  AggregatedStats,
 } from './types';
 import {
   PRE_TRADE_CHECKLIST,
@@ -1882,6 +1906,572 @@ export function getDemoTickBacktest(body: TickBacktestRequest): TickBacktestResu
     max_drawdown_pct: 4.2,
     profit_factor: 1.32,
     duration_seconds: 18.4,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+// --------------------------------------------------------------------------- //
+// FRONTEND-FEATURES: demo generators for 10 new feature surfaces
+// --------------------------------------------------------------------------- //
+
+const DAYS_OF_WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTHS = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+export function getDemoSendTestEmail(recipient: string): SendTestEmailResponse {
+  return {
+    ok: true,
+    recipient,
+    subject: '[Scalping V2] Test Email — Demo Mode',
+    sent_at: new Date().toISOString(),
+    message: `SMTP test email delivered to ${recipient} (demo). Daily digest will be sent at 22:00 WIB.`,
+  };
+}
+
+export function getDemoDailyReport(date?: string): DailyReport {
+  const d = date ?? new Date().toISOString().slice(0, 10);
+  return {
+    date: d,
+    starting_balance: 10000,
+    ending_balance: 10284.42,
+    daily_pnl: 284.42,
+    daily_pnl_pct: 2.84,
+    trades_count: 4,
+    wins: 3,
+    losses: 1,
+    breakeven: 0,
+    win_rate: 75,
+    profit_factor: 3.12,
+    best_trade: {
+      ticket: 50384722,
+      symbol: 'EURUSD',
+      direction: 'BUY',
+      result: 'WIN',
+      r_multiple: 2.4,
+      profit: 184.20,
+      close_reason: 'TP2',
+    },
+    worst_trade: {
+      ticket: 50384719,
+      symbol: 'GBPUSD',
+      direction: 'SELL',
+      result: 'LOSS',
+      r_multiple: -1.0,
+      profit: -82.10,
+      close_reason: 'SL',
+    },
+    compliance_score: 92,
+    notes:
+      'Sesi London Open + Overlap memberikan kontribusi terbesar. ADX rata-rata 31.2 — trending yang sehat.',
+    generated_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoBenchmark(start: string, end: string): BenchmarkResult {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  const days = Math.max(1, Math.round((endDate.getTime() - startDate.getTime()) / 86400_000));
+  const series: BenchmarkResult['series'] = [];
+  let botEq = 10000;
+  let bhEq = 10000;
+  let rndEq = 10000;
+  for (let i = 0; i < days; i++) {
+    const ts = new Date(startDate.getTime() + i * 86400_000).toISOString().slice(0, 10);
+    const botDay = 0.0011 + Math.sin(i / 7) * 0.0045 + (i % 11 === 0 ? -0.008 : 0);
+    const bhDay = 0.0007 + Math.cos(i / 11) * 0.0035;
+    const rndDay = (Math.random() - 0.5) * 0.006;
+    botEq = botEq * (1 + botDay);
+    bhEq = bhEq * (1 + bhDay);
+    rndEq = rndEq * (1 + rndDay);
+    series.push({
+      date: ts,
+      bot_equity: parseFloat(botEq.toFixed(2)),
+      buy_hold_equity: parseFloat(bhEq.toFixed(2)),
+      random_equity: parseFloat(rndEq.toFixed(2)),
+      bot_daily_pct: parseFloat((botDay * 100).toFixed(3)),
+      buy_hold_daily_pct: parseFloat((bhDay * 100).toFixed(3)),
+      random_daily_pct: parseFloat((rndDay * 100).toFixed(3)),
+    });
+  }
+  const botPct = ((botEq / 10000 - 1) * 100);
+  const bhPct = ((bhEq / 10000 - 1) * 100);
+  const rndPct = ((rndEq / 10000 - 1) * 100);
+  return {
+    start_date: start,
+    end_date: end,
+    series,
+    bot_pnl_pct: parseFloat(botPct.toFixed(2)),
+    buy_hold_pnl_pct: parseFloat(bhPct.toFixed(2)),
+    random_pnl_pct: parseFloat(rndPct.toFixed(2)),
+    alpha: parseFloat((botPct - bhPct).toFixed(2)),
+    beta: parseFloat((0.62 + Math.random() * 0.12).toFixed(2)),
+    outperformance_pct: parseFloat((botPct - bhPct).toFixed(2)),
+    p_value: parseFloat((0.018 + Math.random() * 0.01).toFixed(4)),
+    significant: true,
+    bot_sharpe: parseFloat((1.42 + Math.random() * 0.2).toFixed(2)),
+    buy_hold_sharpe: parseFloat((0.78 + Math.random() * 0.15).toFixed(2)),
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoRatios(): PerformanceRatios {
+  return {
+    sharpe: 1.48,
+    sortino: 1.92,
+    alpha: 4.21,
+    beta: 0.58,
+    calmar: 1.34,
+    max_drawdown_pct: -6.8,
+    volatility_pct: 9.4,
+    downside_deviation_pct: 5.2,
+    up_capture: 0.71,
+    down_capture: 0.18,
+    information_ratio: 0.86,
+    treynor_ratio: 18.42,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoSeasonality(): SeasonalityAnalysis {
+  const dayStats: SeasonalityAnalysis['by_day_of_week'] = DAYS_OF_WEEK.map((day, idx) => {
+    const base = [62, 58, 71, 64, 49, 31, 28][idx];
+    const trades = [42, 38, 51, 47, 33, 8, 3][idx];
+    return {
+      day,
+      trades,
+      wins: Math.round(trades * base / 100),
+      losses: trades - Math.round(trades * base / 100),
+      win_rate: base,
+      r_net: parseFloat(((base - 50) / 50 * 0.4).toFixed(2)),
+      profit: parseFloat(((base - 50) * 12.4).toFixed(2)),
+    };
+  });
+  const monthStats: SeasonalityAnalysis['by_month'] = MONTHS.map((m, idx) => {
+    const base = [54, 61, 67, 58, 63, 70, 72, 65, 59, 52, 48, 44][idx];
+    const trades = [38, 42, 51, 45, 48, 56, 58, 52, 47, 40, 32, 28][idx];
+    return {
+      month: m,
+      month_num: idx + 1,
+      trades,
+      wins: Math.round(trades * base / 100),
+      win_rate: base,
+      r_net: parseFloat(((base - 50) / 50 * 0.5).toFixed(2)),
+      profit: parseFloat(((base - 50) * 18.7).toFixed(2)),
+    };
+  });
+  const hourStats: SeasonalityAnalysis['by_hour'] = Array.from({ length: 24 }, (_, h) => {
+    let trades = 0;
+    let wr = 40;
+    // Tokyo 9-12, London 14-17, Overlap 19:30-23
+    if (h >= 9 && h <= 12) { trades = 12; wr = 58; }
+    if (h >= 14 && h <= 17) { trades = 18; wr = 64; }
+    if (h >= 19 && h <= 23) { trades = 22; wr = 67; }
+    if (h >= 0 && h <= 5) { trades = 3; wr = 38; }
+    if (trades === 0) { trades = 2; wr = 44; }
+    return {
+      hour: h,
+      trades,
+      wins: Math.round(trades * wr / 100),
+      win_rate: wr,
+      r_net: parseFloat(((wr - 50) / 50 * 0.3).toFixed(2)),
+      profit: parseFloat(((wr - 50) * 8.4).toFixed(2)),
+    };
+  });
+  const bySession: SeasonalityAnalysis['by_session'] = [
+    { session: 'TOKYO', trades: 142, win_rate: 58, r_net: 0.16, profit: 412.4 },
+    { session: 'LONDON', trades: 224, win_rate: 64, r_net: 0.28, profit: 1284.5 },
+    { session: 'OVERLAP', trades: 268, win_rate: 67, r_net: 0.34, profit: 2104.8 },
+    { session: 'SYDNEY', trades: 24, win_rate: 42, r_net: -0.08, profit: -94.2 },
+    { session: 'LONDON_LUNCH', trades: 38, win_rate: 38, r_net: -0.12, profit: -148.4 },
+    { session: 'SKIP', trades: 12, win_rate: 33, r_net: -0.18, profit: -64.0 },
+  ];
+  return {
+    by_day_of_week: dayStats,
+    by_month: monthStats,
+    by_hour: hourStats,
+    by_session: bySession,
+    best_days: ['Wed', 'Thu', 'Tue'],
+    best_months: ['Jul', 'Jun', 'Aug'],
+    worst_days: ['Sun', 'Sat'],
+    worst_months: ['Dec', 'Nov'],
+    total_trades_analyzed: 708,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoSeasonalityScore(date: string): SeasonalityScore {
+  const d = new Date(date);
+  const dow = d.getDay(); // 0=Sun
+  const dowName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dow];
+  // Wed (3) & Thu (4) → best; Sun (0) & Sat (6) → worst
+  const scoreMap: Record<number, { score: number; label: SeasonalityScore['label']; wr: number; r: number }> = {
+    0: { score: -72, label: 'AVOID', wr: 28, r: -0.32 },
+    1: { score: 12, label: 'NEUTRAL', wr: 62, r: 0.10 },
+    2: { score: 54, label: 'FAVORABLE', wr: 71, r: 0.32 },
+    3: { score: 78, label: 'HIGHLY_FAVORABLE', wr: 76, r: 0.42 },
+    4: { score: 64, label: 'FAVORABLE', wr: 68, r: 0.36 },
+    5: { score: -38, label: 'AVOID', wr: 31, r: -0.22 },
+    6: { score: -65, label: 'AVOID', wr: 27, r: -0.30 },
+  };
+  const info = scoreMap[dow] ?? scoreMap[1];
+  return {
+    date,
+    day_of_week: dowName,
+    score: info.score,
+    label: info.label,
+    expected_win_rate: info.wr,
+    expected_r_net: info.r,
+    rationale:
+      info.label === 'AVOID'
+        ? `Historical win rate for ${dowName} hanya ${info.wr}% — weekend/low-liquidity. Skip trading.`
+        : info.label === 'HIGHLY_FAVORABLE'
+          ? `${dowName} menunjukkan win rate ${info.wr}% dan R-net +${info.r} — kondisi ideal untuk scalping.`
+          : `${dowName} win rate ${info.wr}% — tradeable namun selektif terhadap setup A+.`,
+  };
+}
+
+export function getDemoOptimalParams(): OptimalParams {
+  return {
+    risk_pct_per_trade: 0.012,
+    max_positions: 3,
+    max_daily_trades: 5,
+    rr_net_min: 2.1,
+    sl_atr_mult: 1.5,
+    tp1_mult: 2.0,
+    tp2_mult: 4.0,
+    trailing_atr_mult: 2.0,
+    be_buffer_pips: 2.0,
+    adx_trending_threshold: 25,
+    adx_ranging_threshold: 20,
+  };
+}
+
+export function getDemoOptimizationResult(): OptimizationResult {
+  return {
+    run_id: `opt_${Math.random().toString(36).slice(2, 10)}`,
+    started_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    finished_at: new Date().toISOString(),
+    status: 'COMPLETED',
+    previous_params: getDemoOptimalParams(),
+    optimized_params: {
+      ...getDemoOptimalParams(),
+      risk_pct_per_trade: 0.014,
+      rr_net_min: 2.25,
+      tp2_mult: 4.2,
+      adx_trending_threshold: 27,
+    },
+    backtest_before: {
+      pnl_pct: 12.4,
+      sharpe: 1.18,
+      max_dd_pct: 7.2,
+      profit_factor: 1.42,
+    },
+    backtest_after: {
+      pnl_pct: 18.6,
+      sharpe: 1.48,
+      max_dd_pct: 6.4,
+      profit_factor: 1.78,
+    },
+    improvement_pct: 50.0,
+    trials: 128,
+    note: 'Bayesian optimization (128 trials, 5-fold walk-forward) menemukan risk 1.4% + RR≥2.25 optimal untuk regime trending.',
+  };
+}
+
+export function getDemoOptimizationHistory(): OptimizationHistoryEntry[] {
+  const now = Date.now();
+  return [
+    { run_id: 'opt_9a8b', finished_at: new Date(now - 1 * 86400_000).toISOString(), status: 'COMPLETED', improvement_pct: 50.0, pnl_after_pct: 18.6, sharpe_after: 1.48, trials: 128 },
+    { run_id: 'opt_k2j7', finished_at: new Date(now - 4 * 86400_000).toISOString(), status: 'COMPLETED', improvement_pct: 28.4, pnl_after_pct: 14.2, sharpe_after: 1.31, trials: 96 },
+    { run_id: 'opt_p3x1', finished_at: new Date(now - 7 * 86400_000).toISOString(), status: 'PARTIAL', improvement_pct: 12.1, pnl_after_pct: 11.8, sharpe_after: 1.18, trials: 64 },
+    { run_id: 'opt_q9z4', finished_at: new Date(now - 11 * 86400_000).toISOString(), status: 'COMPLETED', improvement_pct: 34.7, pnl_after_pct: 15.9, sharpe_after: 1.36, trials: 112 },
+    { run_id: 'opt_m5r2', finished_at: new Date(now - 14 * 86400_000).toISOString(), status: 'FAILED', improvement_pct: -3.2, pnl_after_pct: 8.4, sharpe_after: 0.92, trials: 48 },
+  ];
+}
+
+export function getDemoVoiceTestResult(text: string, volume: number): VoiceTestResult {
+  return {
+    ok: true,
+    text,
+    volume,
+    engine: 'pyttsx3',
+    duration_ms: Math.round(text.length * 75),
+    fired_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoVoiceStatus(): VoiceStatus {
+  return {
+    enabled: true,
+    engine: 'pyttsx3',
+    volume: 0.7,
+    voice_id: 'en-us-male',
+    last_alert: 'KILL SWITCH TEST — issued 2 menit lalu',
+    alerts_fired_today: 14,
+    available_voices: 4,
+    supported: true,
+  };
+}
+
+export function getDemoTelegramCommands(): TelegramCommand[] {
+  return [
+    { command: '/status', description: 'Lihat status bot & akun MT5', args: '(none)', example: '/status', admin_only: false },
+    { command: '/start', description: 'Start bot auto-trading', args: '(none)', example: '/start', admin_only: true },
+    { command: '/stop', description: 'Stop bot (pause, tidak kill)', args: '(none)', example: '/stop', admin_only: true },
+    { command: '/kill', description: 'KILL SWITCH — tutup semua posisi & hentikan', args: '(none)', example: '/kill', admin_only: true },
+    { command: '/positions', description: 'Daftar posisi terbuka', args: '(none)', example: '/positions', admin_only: false },
+    { command: '/daily', description: 'Ringkasan daily P&L', args: '[date]', example: '/daily 2026-01-12', admin_only: false },
+    { command: '/risk', description: 'Status tiered stop risk', args: '(none)', example: '/risk', admin_only: false },
+    { command: '/config', description: 'Lihat parameter V2 aktif', args: '(none)', example: '/config', admin_only: true },
+    { command: '/report', description: 'Kirim daily report email sekarang', args: '[recipient]', example: '/report me@example.com', admin_only: true },
+    { command: '/screenshot', description: 'Screenshot chart terbaru', args: '[ticket]', example: '/screenshot 50384722', admin_only: false },
+  ];
+}
+
+export function getDemoTelegramCommandResponse(command: string): TelegramCommandResponse {
+  const cmd = command.trim().toLowerCase();
+  let text = '';
+  switch (cmd) {
+    case '/status':
+      text = '🟢 Bot RUNNING\nBalance: $10,284.42\nOpen positions: 2\nToday P&L: +2.84%';
+      break;
+    case '/positions':
+      text = 'Open positions (2):\n• #50384722 EURUSD BUY +0.4R\n• #50384725 USDJPY SELL +1.2R (TP1 hit)';
+      break;
+    case '/risk':
+      text = 'Tiered stops:\nSoft 1%: 0% used\nHard 2%: 0% used\nWeekly 4%: 1.2% used\nOverall 10%: 2.8% used';
+      break;
+    default:
+      text = `✅ Command "${command}" diterima & diproses.`;
+  }
+  return {
+    ok: true,
+    command,
+    response_text: text,
+    chat_id: '-1001234567890',
+    sent_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoScreenshot(ticket: number): ScreenshotInfo {
+  return {
+    ticket,
+    symbol: ticket % 2 === 0 ? 'EURUSD' : 'USDJPY',
+    captured_at: new Date(Date.now() - 30 * 60_000).toISOString(),
+    file_path: `/screenshots/ticket_${ticket}_entry.png`,
+    thumbnail_url: null,
+    full_url: null,
+    width: 1280,
+    height: 720,
+    size_bytes: 248_402,
+    caption: `Entry chart untuk ticket #${ticket} — EURUSD 5M timeframe (snapshot at TP1 hit)`,
+  };
+}
+
+export function getDemoScreenshotList(ticket: number): ScreenshotListResponse {
+  const shots: ScreenshotInfo[] = [
+    { ...getDemoScreenshot(ticket), captured_at: new Date(Date.now() - 180 * 60_000).toISOString(), caption: `Pre-entry chart #${ticket}` },
+    { ...getDemoScreenshot(ticket), captured_at: new Date(Date.now() - 120 * 60_000).toISOString(), caption: `Entry confirmation #${ticket}` },
+    { ...getDemoScreenshot(ticket), captured_at: new Date(Date.now() - 60 * 60_000).toISOString(), caption: `TP1 hit #${ticket}` },
+  ];
+  return { ticket, total: shots.length, screenshots: shots };
+}
+
+export function getDemoMLTrainResult(): MLTrainResult {
+  return {
+    ok: true,
+    model_version: `ml-v2-${Math.random().toString(36).slice(2, 8)}`,
+    trained_at: new Date().toISOString(),
+    samples: 1284,
+    features: 24,
+    accuracy: 0.682,
+    precision: 0.71,
+    recall: 0.64,
+    f1: 0.673,
+    auc: 0.74,
+    duration_seconds: 18.4,
+    note: 'GradientBoostingClassifier (regime + direction). 5-fold walk-forward CV dengan purge embargo.',
+  };
+}
+
+export function getDemoMLPrediction(symbol: string): MLPrediction {
+  const regimes = ['TRENDING', 'TRANSITION', 'RANGING', 'EXHAUSTION'] as const;
+  const directions = ['BUY', 'SELL'] as const;
+  const regime = regimes[Math.floor(Math.random() * regimes.length)];
+  const dir = Math.random() > 0.4 ? directions[Math.floor(Math.random() * directions.length)] : null;
+  return {
+    symbol,
+    predicted_regime: regime,
+    regime_confidence: parseFloat((0.62 + Math.random() * 0.32).toFixed(2)),
+    predicted_direction: dir,
+    direction_confidence: dir ? parseFloat((0.55 + Math.random() * 0.25).toFixed(2)) : 0,
+    predicted_win_prob: parseFloat((0.48 + Math.random() * 0.22).toFixed(2)),
+    features_snapshot: {
+      adx_15m: 27 + Math.random() * 8,
+      atr_5m_pips: 8 + Math.random() * 4,
+      rsi_14: 42 + Math.random() * 24,
+      vwap_distance_pips: 1 + Math.random() * 3,
+      spread_pips: 0.8 + Math.random() * 0.4,
+    },
+    model_version: 'ml-v2-1a4f7c',
+    predicted_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoMLFeatures(): MLFeatures {
+  const features: MLFeatures['features'] = [
+    { name: 'adx_15m', importance: 0.184, description: 'ADX 14-period on 15M timeframe (regime filter)', category: 'regime' },
+    { name: 'atr_5m_pips', importance: 0.142, description: 'ATR(14) on 5M expressed in pips (volatility)', category: 'volatility' },
+    { name: 'vwap_distance_pips', importance: 0.118, description: 'Distance price to VWAP in pips', category: 'price' },
+    { name: 'rsi_14', importance: 0.094, description: 'RSI 14-period momentum', category: 'momentum' },
+    { name: 'ema9_ema21_slope', importance: 0.082, description: 'Slope of EMA9-EMA21 spread', category: 'momentum' },
+    { name: 'session_overlap', importance: 0.078, description: 'Binary: 1 jika overlap London-NY', category: 'session' },
+    { name: 'spread_pips', importance: 0.064, description: 'Live spread in pips', category: 'price' },
+    { name: 'volume_zscore', importance: 0.058, description: 'Volume z-score vs 20-period mean', category: 'volume' },
+    { name: 'hour_sin', importance: 0.052, description: 'Sine encoding of hour-of-day', category: 'session' },
+    { name: 'atr_pct_change', importance: 0.048, description: 'ATR rate-of-change', category: 'volatility' },
+    { name: 'price_above_ema21', importance: 0.042, description: 'Binary: price above EMA21', category: 'price' },
+    { name: 'adx_slope', importance: 0.038, description: 'ADX rate-of-change', category: 'regime' },
+  ];
+  return {
+    model_version: 'ml-v2-1a4f7c',
+    features,
+    total_features: features.length,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoNewsTradingStatus(): NewsTradingStatus {
+  return {
+    enabled: true,
+    risk_pct: 0.005,
+    blackout_minutes_before: 30,
+    blackout_minutes_after: 30,
+    min_impact: 'HIGH',
+    auto_reduce_positions: true,
+    active_blackouts: 1,
+    next_event: {
+      title: 'US CPI (m/m)',
+      time: new Date(Date.now() + 90 * 60_000).toISOString(),
+      impact: 'HIGH',
+      currency: 'USD',
+    },
+  };
+}
+
+export function getDemoNewsTradingStats(): NewsTradingStats {
+  return {
+    total_events: 184,
+    trades_during_blackout: 0,
+    trades_blocked: 47,
+    positions_reduced: 12,
+    blackouts_triggered: 184,
+    pnl_during_events_pct: 4.8,
+    pnl_during_blackouts_pct: -0.4,
+    avg_volatility_during_event: 2.4,
+    window_days: 90,
+    computed_at: new Date().toISOString(),
+  };
+}
+
+export function getDemoMT5Accounts(): MT5AccountsListResponse {
+  const accounts: MT5Account[] = [
+    {
+      name: 'primary',
+      login: 50384721,
+      server: 'FinexIC-Markets',
+      broker: 'Finex Indonesia',
+      currency: 'USD',
+      leverage: 100,
+      balance: 10284.42,
+      equity: 10312.10,
+      margin: 412.40,
+      margin_free: 9899.70,
+      margin_level: 2502.7,
+      profit: 27.68,
+      bot_status: 'RUNNING',
+      bot_mode: 'PAPER',
+      last_sync: new Date().toISOString(),
+      connected: true,
+    },
+    {
+      name: 'aggressive',
+      login: 50384722,
+      server: 'FinexIC-Markets',
+      broker: 'Finex Indonesia',
+      currency: 'USD',
+      leverage: 200,
+      balance: 5120.00,
+      equity: 5184.20,
+      margin: 280.10,
+      margin_free: 4904.10,
+      margin_level: 1850.5,
+      profit: 64.20,
+      bot_status: 'RUNNING',
+      bot_mode: 'LIVE',
+      last_sync: new Date().toISOString(),
+      connected: true,
+    },
+    {
+      name: 'conservative',
+      login: 50384723,
+      server: 'FinexIC-Markets',
+      broker: 'Finex Indonesia',
+      currency: 'USD',
+      leverage: 50,
+      balance: 20480.00,
+      equity: 20462.30,
+      margin: 0,
+      margin_free: 20462.30,
+      margin_level: 0,
+      profit: -17.70,
+      bot_status: 'STOPPED',
+      bot_mode: 'DRY',
+      last_sync: new Date(Date.now() - 5 * 60_000).toISOString(),
+      connected: false,
+    },
+  ];
+  return { accounts, total: accounts.length, active_bots: 2 };
+}
+
+export function getDemoAddAccount(body: AddAccountRequest): MT5Account {
+  return {
+    name: body.name,
+    login: body.login,
+    server: body.server,
+    broker: body.broker ?? 'Finex Indonesia',
+    currency: 'USD',
+    leverage: 100,
+    balance: body.initial_balance ?? 5000,
+    equity: body.initial_balance ?? 5000,
+    margin: 0,
+    margin_free: body.initial_balance ?? 5000,
+    margin_level: 0,
+    profit: 0,
+    bot_status: 'STOPPED',
+    bot_mode: 'PAPER',
+    last_sync: new Date().toISOString(),
+    connected: true,
+  };
+}
+
+export function getDemoAggregatedStats(): AggregatedStats {
+  return {
+    total_balance: 35884.42,
+    total_equity: 35958.60,
+    total_profit: 74.18,
+    total_margin_used: 692.50,
+    total_free_margin: 35266.10,
+    accounts_count: 3,
+    connected_count: 2,
+    bots_running: 2,
+    bots_stopped: 1,
+    best_account: { name: 'aggressive', pnl_pct: 1.25 },
+    worst_account: { name: 'conservative', pnl_pct: -0.09 },
+    total_trades_today: 14,
+    blended_pnl_pct: 0.21,
     computed_at: new Date().toISOString(),
   };
 }

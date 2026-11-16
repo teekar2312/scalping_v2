@@ -19,6 +19,8 @@ import { AnalyticsView } from '@/components/app/views/analytics-view';
 import { AlertsView } from '@/components/app/views/alerts-view';
 import { MarketAnalysisView } from '@/components/app/views/market-analysis-view';
 import { SystemHealthView } from '@/components/app/views/system-health-view';
+import { PerformanceView } from '@/components/app/views/performance-view';
+import { FeaturesView } from '@/components/app/views/features-view';
 import { CommandPalette } from '@/components/app/command-palette';
 import { ShortcutsHelp } from '@/components/app/shortcuts-help';
 import { LoginView } from '@/components/app/login-view';
@@ -79,6 +81,8 @@ export default function Home() {
               {activeView === 'alerts' && <AlertsView />}
               {activeView === 'market' && <MarketAnalysisView />}
               {activeView === 'system' && <SystemHealthView />}
+              {activeView === 'performance' && <PerformanceView />}
+              {activeView === 'features' && <FeaturesView />}
               {activeView === 'settings' && <SettingsView />}
             </main>
           </div>

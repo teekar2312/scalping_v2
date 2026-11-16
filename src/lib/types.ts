@@ -1132,3 +1132,381 @@ export interface BackupOffsiteResponse {
   uploaded_at: string;
   message: string;
 }
+
+// --------------------------------------------------------------------------- //
+// FRONTEND-FEATURES: 10 new feature surfaces (28 backend endpoints)
+// --------------------------------------------------------------------------- //
+
+// --- Email reports (POST /api/reports/send-test, GET /api/reports/daily) --- //
+export interface SendTestEmailResponse {
+  ok: boolean;
+  recipient: string;
+  subject: string;
+  sent_at: string;
+  message: string;
+}
+
+export interface DailyReportTradeSummary {
+  ticket: number;
+  symbol: string;
+  direction: TradeDirection;
+  result: TradeResult;
+  r_multiple: number;
+  profit: number;
+  close_reason: CloseReason;
+}
+
+export interface DailyReport {
+  date: string;
+  starting_balance: number;
+  ending_balance: number;
+  daily_pnl: number;
+  daily_pnl_pct: number;
+  trades_count: number;
+  wins: number;
+  losses: number;
+  breakeven: number;
+  win_rate: number;
+  profit_factor: number;
+  best_trade: DailyReportTradeSummary | null;
+  worst_trade: DailyReportTradeSummary | null;
+  compliance_score: number;
+  notes: string;
+  generated_at: string;
+}
+
+// --- Benchmark (GET /api/analytics/benchmark, GET /api/analytics/ratios) --- //
+export interface BenchmarkSeriesPoint {
+  date: string;
+  bot_equity: number;
+  buy_hold_equity: number;
+  random_equity: number;
+  bot_daily_pct: number;
+  buy_hold_daily_pct: number;
+  random_daily_pct: number;
+}
+
+export interface BenchmarkResult {
+  start_date: string;
+  end_date: string;
+  series: BenchmarkSeriesPoint[];
+  bot_pnl_pct: number;
+  buy_hold_pnl_pct: number;
+  random_pnl_pct: number;
+  alpha: number;
+  beta: number;
+  outperformance_pct: number;
+  p_value: number;
+  significant: boolean;
+  bot_sharpe: number;
+  buy_hold_sharpe: number;
+  computed_at: string;
+}
+
+export interface PerformanceRatios {
+  sharpe: number;
+  sortino: number;
+  alpha: number;
+  beta: number;
+  calmar: number;
+  max_drawdown_pct: number;
+  volatility_pct: number;
+  downside_deviation_pct: number;
+  up_capture: number;
+  down_capture: number;
+  information_ratio: number;
+  treynor_ratio: number;
+  computed_at: string;
+}
+
+// --- Seasonality (GET /api/analytics/seasonality, /seasonality/score) --- //
+export interface DayOfWeekStats {
+  day: string; // "Mon".."Sun"
+  trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  r_net: number;
+  profit: number;
+}
+
+export interface MonthStats {
+  month: string; // "Jan".."Dec"
+  month_num: number;
+  trades: number;
+  wins: number;
+  win_rate: number;
+  r_net: number;
+  profit: number;
+}
+
+export interface HourStats {
+  hour: number; // 0..23 (WIB)
+  trades: number;
+  wins: number;
+  win_rate: number;
+  r_net: number;
+  profit: number;
+}
+
+export interface SessionSeasonalityStats {
+  session: SessionName;
+  trades: number;
+  win_rate: number;
+  r_net: number;
+  profit: number;
+}
+
+export interface SeasonalityAnalysis {
+  by_day_of_week: DayOfWeekStats[];
+  by_month: MonthStats[];
+  by_hour: HourStats[];
+  by_session: SessionSeasonalityStats[];
+  best_days: string[];
+  best_months: string[];
+  worst_days: string[];
+  worst_months: string[];
+  total_trades_analyzed: number;
+  computed_at: string;
+}
+
+export interface SeasonalityScore {
+  date: string;
+  day_of_week: string;
+  score: number; // -100 (avoid) to +100 (favorable)
+  label: 'AVOID' | 'NEUTRAL' | 'FAVORABLE' | 'HIGHLY_FAVORABLE';
+  expected_win_rate: number;
+  expected_r_net: number;
+  rationale: string;
+}
+
+// --- Auto-tune (POST /api/auto-tune/optimize, GET /current, /history) --- //
+export interface OptimalParams {
+  risk_pct_per_trade: number;
+  max_positions: number;
+  max_daily_trades: number;
+  rr_net_min: number;
+  sl_atr_mult: number;
+  tp1_mult: number;
+  tp2_mult: number;
+  trailing_atr_mult: number;
+  be_buffer_pips: number;
+  adx_trending_threshold: number;
+  adx_ranging_threshold: number;
+}
+
+export interface OptimizationResult {
+  run_id: string;
+  started_at: string;
+  finished_at: string;
+  status: 'COMPLETED' | 'FAILED' | 'PARTIAL';
+  previous_params: OptimalParams;
+  optimized_params: OptimalParams;
+  backtest_before: {
+    pnl_pct: number;
+    sharpe: number;
+    max_dd_pct: number;
+    profit_factor: number;
+  };
+  backtest_after: {
+    pnl_pct: number;
+    sharpe: number;
+    max_dd_pct: number;
+    profit_factor: number;
+  };
+  improvement_pct: number;
+  trials: number;
+  note: string;
+}
+
+export interface OptimizationHistoryEntry {
+  run_id: string;
+  finished_at: string;
+  status: 'COMPLETED' | 'FAILED' | 'PARTIAL';
+  improvement_pct: number;
+  pnl_after_pct: number;
+  sharpe_after: number;
+  trials: number;
+}
+
+// --- Voice (POST /api/voice/test, GET /api/voice/status) --- //
+export interface VoiceTestResult {
+  ok: boolean;
+  text: string;
+  volume: number;
+  engine: string;
+  duration_ms: number;
+  fired_at: string;
+}
+
+export interface VoiceStatus {
+  enabled: boolean;
+  engine: 'pyttsx3' | 'gtts' | 'system';
+  volume: number; // 0-1
+  voice_id: string | null;
+  last_alert: string | null;
+  alerts_fired_today: number;
+  available_voices: number;
+  supported: boolean;
+}
+
+// --- Telegram (POST /api/telegram/send-command, GET /api/telegram/commands) --- //
+export interface TelegramCommand {
+  command: string; // e.g. "/status"
+  description: string;
+  args: string;
+  example: string;
+  admin_only: boolean;
+}
+
+export interface TelegramCommandResponse {
+  ok: boolean;
+  command: string;
+  response_text: string;
+  chat_id: string;
+  sent_at: string;
+}
+
+// --- Screenshot (GET /api/screenshot/{ticket}, GET /api/screenshots/{ticket}/list) --- //
+export interface ScreenshotInfo {
+  ticket: number;
+  symbol: string;
+  captured_at: string;
+  file_path: string;
+  thumbnail_url: string | null;
+  full_url: string | null;
+  width: number;
+  height: number;
+  size_bytes: number;
+  caption: string;
+}
+
+export interface ScreenshotListResponse {
+  ticket: number;
+  total: number;
+  screenshots: ScreenshotInfo[];
+}
+
+// --- ML (POST /api/ml/train, GET /api/ml/predict, GET /api/ml/features) --- //
+export interface MLTrainResult {
+  ok: boolean;
+  model_version: string;
+  trained_at: string;
+  samples: number;
+  features: number;
+  accuracy: number;
+  precision: number;
+  recall: number;
+  f1: number;
+  auc: number;
+  duration_seconds: number;
+  note: string;
+}
+
+export interface MLPrediction {
+  symbol: string;
+  predicted_regime: MarketRegime;
+  regime_confidence: number; // 0-1
+  predicted_direction: TradeDirection | null;
+  direction_confidence: number;
+  predicted_win_prob: number;
+  features_snapshot: Record<string, number>;
+  model_version: string;
+  predicted_at: string;
+}
+
+export interface MLFeature {
+  name: string;
+  importance: number; // 0-1
+  description: string;
+  category: 'price' | 'momentum' | 'volatility' | 'volume' | 'session' | 'regime';
+}
+
+export interface MLFeatures {
+  model_version: string;
+  features: MLFeature[];
+  total_features: number;
+  computed_at: string;
+}
+
+// --- News trading (POST /api/news-trading/enable, GET /status, /stats) --- //
+export interface NewsTradingStatus {
+  enabled: boolean;
+  risk_pct: number;
+  blackout_minutes_before: number;
+  blackout_minutes_after: number;
+  min_impact: NewsImpact;
+  auto_reduce_positions: boolean;
+  active_blackouts: number;
+  next_event: {
+    title: string;
+    time: string;
+    impact: NewsImpact;
+    currency: string;
+  } | null;
+}
+
+export interface NewsTradingStats {
+  total_events: number;
+  trades_during_blackout: number;
+  trades_blocked: number;
+  positions_reduced: number;
+  blackouts_triggered: number;
+  pnl_during_events_pct: number;
+  pnl_during_blackouts_pct: number;
+  avg_volatility_during_event: number;
+  window_days: number;
+  computed_at: string;
+}
+
+// --- Multi-account (POST /api/accounts, GET /api/accounts, DELETE /api/accounts/{name}, POST /start, /stop, GET /aggregate) --- //
+export interface AddAccountRequest {
+  name: string;
+  login: number;
+  password: string;
+  server: string;
+  broker?: string;
+  initial_balance?: number;
+}
+
+export interface MT5Account {
+  name: string;
+  login: number;
+  server: string;
+  broker: string;
+  currency: string;
+  leverage: number;
+  balance: number;
+  equity: number;
+  margin: number;
+  margin_free: number;
+  margin_level: number;
+  profit: number;
+  bot_status: BotStatus;
+  bot_mode: BotMode;
+  last_sync: string;
+  connected: boolean;
+}
+
+export interface MT5AccountsListResponse {
+  accounts: MT5Account[];
+  total: number;
+  active_bots: number;
+}
+
+export interface AggregatedStats {
+  total_balance: number;
+  total_equity: number;
+  total_profit: number;
+  total_margin_used: number;
+  total_free_margin: number;
+  accounts_count: number;
+  connected_count: number;
+  bots_running: number;
+  bots_stopped: number;
+  best_account: { name: string; pnl_pct: number } | null;
+  worst_account: { name: string; pnl_pct: number } | null;
+  total_trades_today: number;
+  blended_pnl_pct: number;
+  computed_at: string;
+}

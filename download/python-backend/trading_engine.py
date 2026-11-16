@@ -428,6 +428,16 @@ class TradingEngine:
         # News pre/post management (audit-fix Sprint 2 #14)
         await self._maybe_news_reduce()
 
+        # ---- BACKEND-FEATURES (Sprint 10) integrations ------------------ #
+        # Voice alert subscription (Feature #5)
+        await self._maybe_dispatch_voice_alerts()
+        # Daily email report scheduled at 23:00 WIB (Feature #1)
+        await self._maybe_send_daily_report(account)
+        # Auto-tuner retraining check (Feature #4)
+        await self._maybe_run_auto_tuner()
+        # News trading straddle detection (Feature #9)
+        await self._maybe_news_straddle(account)
+
         # Manage open positions first
         await self.manage_open_positions(account.balance)
 
@@ -809,6 +819,17 @@ class TradingEngine:
                 )
             except Exception as exc:  # pragma: no cover
                 logger.warning("insert_trade_event ENTRY failed: %s", exc)
+            # BACKEND-FEATURES #7: capture entry screenshot
+            ticket_val = order.get("ticket")
+            if ticket_val:
+                await self._capture_trade_screenshot(
+                    ticket=int(ticket_val),
+                    symbol=sig.symbol,
+                    direction=sig.direction or "buy",
+                    entry=sig.entry_price,
+                    sl=sig.sl_price or 0.0,
+                    tp=sig.tp1_price or 0.0,
+                )
         else:
             logger.warning("Order failed for %s: %s", sig.symbol, order)
 
@@ -1150,6 +1171,21 @@ class TradingEngine:
             "ok": result.get("ok"),
             "ts": datetime.now(timezone.utc).isoformat(),
         })
+        # BACKEND-FEATURES #7: capture exit screenshot
+        try:
+            row = db.get_trade_by_ticket(int(ticket)) or {}
+            await self._capture_exit_screenshot(
+                ticket=int(ticket),
+                symbol=row.get("symbol") or "",
+                entry=float(row.get("open_price") or 0.0),
+                exit_price=float(row.get("close_price")
+                                 or row.get("open_price") or 0.0),
+                sl=float(row.get("sl") or 0.0),
+                tp=float(row.get("tp") or 0.0),
+                result=reason,
+            )
+        except Exception:  # pragma: no cover
+            pass
         return result
 
     # ------------------------------------------------------------------ #
@@ -1665,6 +1701,178 @@ class TradingEngine:
                                    exc)
                 except Exception as exc:  # pragma: no cover
                     logger.warning("news_reduce partial_close failed: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    # BACKEND-FEATURES (Sprint 10) — engine integrations
+    # ------------------------------------------------------------------ #
+
+    async def _maybe_dispatch_voice_alerts(self) -> None:
+        """Forward critical EventBus events to the VoiceAlertManager.
+
+        The voice manager keeps a flag for whether it's enabled + has the
+        TTS dep installed, so the call is cheap when disabled.
+        """
+        try:
+            from voice_alerts import get_voice_alert_manager
+            mgr = get_voice_alert_manager()
+            if not mgr.enabled:
+                return
+            # Pull the last few critical events from the audit log
+            recent = db.list_audit_log(limit=5, severity="CRITICAL")
+            for ev in recent[-3:]:
+                event = {
+                    "type": (ev.get("event_type") or "").lower(),
+                    "symbol": ev.get("symbol"),
+                    "level": None,
+                    "reason": (ev.get("detail") or {}).get("reason"),
+                    "profit": (ev.get("detail") or {}).get("profit"),
+                }
+                await mgr.handle_event(event)
+        except Exception as exc:  # pragma: no cover
+            logger.debug("voice dispatch failed: %s", exc)
+
+    async def _maybe_send_daily_report(self, account: Any) -> None:
+        """Send the daily email report at 23:00 WIB (once per day).
+
+        Uses a setting row ``last_daily_report_date`` to ensure we only fire
+        once per day even if the loop ticks past 23:00 multiple times.
+        """
+        try:
+            from email_report import (
+                get_email_reporter, build_daily_stats,
+            )
+            reporter = get_email_reporter()
+            if not reporter.enabled:
+                return
+            # Check the WIB hour
+            now_wib = datetime.now(WIB_TZ)
+            if now_wib.hour < 23:
+                return
+            today_iso = now_wib.strftime("%Y-%m-%d")
+            last_sent = db.get_setting("last_daily_report_date", "")
+            if last_sent == today_iso:
+                return
+            # Build stats + send
+            today_trades = [
+                t for t in db.list_trades(limit=500)
+                if (t.get("open_time") or "").startswith(today_iso)
+            ]
+            snap = self.snapshot()
+            stats = build_daily_stats(
+                trades=today_trades,
+                bot_status=("running" if snap.get("is_running") else "stopped"),
+                open_positions=int(snap.get("open_positions", 0)),
+                starting_balance=float(snap.get("balance", 0)),
+                ending_balance=float(snap.get("equity",
+                                              snap.get("balance", 0))),
+                tomorrow_news=[],
+            )
+            ok = await reporter.send_daily_report(today_trades, stats)
+            if ok:
+                db.set_setting("last_daily_report_date", today_iso)
+                logger.info("Daily email report sent for %s", today_iso)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Daily report send failed: %s", exc)
+
+    async def _maybe_run_auto_tuner(self) -> None:
+        """Trigger AutoTuner retraining if it's overdue (Feature #4).
+
+        Only runs if ``AUTO_TUNE_ENABLED=true`` AND the bot is in paper /
+        dry-run mode (so it never disturbs live trading).
+        """
+        try:
+            if not cfg.AUTO_TUNE_ENABLED:
+                return
+            if not (self.paper_mode or self.dry_run):
+                return  # don't run during live trading
+            from auto_tuner import get_auto_tuner
+            tuner = get_auto_tuner()
+            if not tuner.should_retrain():
+                return
+            trades = db.list_trades(limit=2000, status="closed")
+            if not trades:
+                return
+            logger.info("Auto-tuner: triggering retraining")
+            report = tuner.optimize_parameters(trades)
+            # Auto-apply if improvement > 5%
+            if report.improvement_pct > 5.0:
+                tuner.apply_optimized_parameters(report.best.params)
+                logger.info("Auto-tuner: applied params (improvement=%.2f%%)",
+                            report.improvement_pct)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Auto-tuner run failed: %s", exc)
+
+    async def _maybe_news_straddle(self, account: Any) -> None:
+        """Check for HIGH-impact news straddle setups (Feature #9).
+
+        The actual order placement is delegated to NewsTradingEngine.  This
+        is a no-op when news trading is disabled.
+        """
+        try:
+            from news_trading import get_news_trading_engine
+            engine = get_news_trading_engine()
+            if not engine.enabled:
+                return
+            cal = get_calendar()
+            news_events = await cal.fetch_calendar(impact="HIGH")
+            for pair, mt5_sym in zip(settings.pairs, settings.mt5_symbols):
+                setup = engine.check_news_setup(news_events, pair)
+                if setup.should_trade:
+                    logger.info("News straddle setup: %s @ %s",
+                                pair, setup.news_time.isoformat())
+                    await engine.place_straddle(
+                        symbol=pair,
+                        entry_pips=10.0,
+                        sl_pips=15.0,
+                        risk_pct=engine.risk_pct,
+                        news_time=setup.news_time,
+                        news_title=setup.news_title,
+                        mt5_symbol=mt5_sym,
+                    )
+        except Exception as exc:  # pragma: no cover
+            logger.debug("news straddle check failed: %s", exc)
+
+    async def _capture_trade_screenshot(self,
+                                        ticket: int,
+                                        symbol: str,
+                                        direction: str,
+                                        entry: float,
+                                        sl: float,
+                                        tp: float) -> None:
+        """Capture an entry screenshot for a just-opened trade (Feature #7).
+
+        Called by ``on_signal`` after a successful order placement.  Failures
+        are logged but never raised so the trading loop isn't disturbed.
+        """
+        try:
+            from screenshot import get_screenshot_capture
+            cap = get_screenshot_capture()
+            cap.capture_entry(
+                ticket=ticket, symbol=symbol, direction=direction,
+                entry=entry, sl=sl, tp=tp,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.debug("entry screenshot failed: %s", exc)
+
+    async def _capture_exit_screenshot(self,
+                                       ticket: int,
+                                       symbol: str,
+                                       entry: float,
+                                       exit_price: float,
+                                       sl: float,
+                                       tp: float,
+                                       result: str) -> None:
+        """Capture an exit screenshot for a just-closed trade (Feature #7)."""
+        try:
+            from screenshot import get_screenshot_capture
+            cap = get_screenshot_capture()
+            cap.capture_exit(
+                ticket=ticket, symbol=symbol,
+                entry=entry, exit_price=exit_price,
+                sl=sl, tp=tp, result=result,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.debug("exit screenshot failed: %s", exc)
 
     # ------------------------------------------------------------------ #
     # Audit-fix Sprint 2 #12: paper / dry-run toggles

@@ -1940,6 +1940,10 @@ __all__ = [
     "RiskAcknowledgment", "TradeEvent", "LatencySample", "StressTestResult",
     # BACKEND-100 #12
     "SwapRecord",
+    # BACKEND-FEATURES (Sprint 10): new models — declared in their feature
+    # modules but registered on Base.metadata so create_all() picks them up.
+    # Re-imported here so callers can ``from database import ...``.
+    # The actual model classes are available via the feature modules.
     # CRUD
     "insert_trade", "update_trade", "get_trade", "list_trades",
     "get_trade_by_ticket", "get_trade_orm_by_ticket", "list_open_trades",
@@ -1968,3 +1972,32 @@ __all__ = [
     "insert_swap_record", "list_swap_records",
     "swap_summary_by_day", "swap_summary_by_symbol",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# BACKEND-FEATURES (Sprint 10): import feature module models so their
+# SQLAlchemy tables are registered on Base.metadata BEFORE create_all() runs
+# in Database.__init__.  The import is wrapped in try/except so a missing
+# optional dep (sklearn / matplotlib / pyttsx3 / aiosmtplib) doesn't break
+# the DB layer.
+# --------------------------------------------------------------------------- #
+
+try:
+    from seasonality import SeasonalityStat  # noqa: F401
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from auto_tuner import OptimizationResult  # noqa: F401
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from news_trading import NewsTrade  # noqa: F401
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from multi_account import MT5Account  # noqa: F401
+except Exception:  # pragma: no cover
+    pass

@@ -81,6 +81,31 @@ import type {
   TickBacktestRequest,
   TickBacktestResult,
   BackupOffsiteResponse,
+  // FRONTEND-FEATURES new types
+  SendTestEmailResponse,
+  DailyReport,
+  BenchmarkResult,
+  PerformanceRatios,
+  SeasonalityAnalysis,
+  SeasonalityScore,
+  OptimizationResult,
+  OptimizationHistoryEntry,
+  OptimalParams,
+  VoiceTestResult,
+  VoiceStatus,
+  TelegramCommand,
+  TelegramCommandResponse,
+  ScreenshotInfo,
+  ScreenshotListResponse,
+  MLTrainResult,
+  MLPrediction,
+  MLFeatures,
+  NewsTradingStatus,
+  NewsTradingStats,
+  AddAccountRequest,
+  MT5Account,
+  MT5AccountsListResponse,
+  AggregatedStats,
 } from './types';
 import {
   getDemoAccount,
@@ -139,6 +164,30 @@ import {
   getDemoBrokerStatus,
   getDemoSwapsReport,
   getDemoTickBacktest,
+  // FRONTEND-FEATURES demo generators
+  getDemoSendTestEmail,
+  getDemoDailyReport,
+  getDemoBenchmark,
+  getDemoRatios,
+  getDemoSeasonality,
+  getDemoSeasonalityScore,
+  getDemoOptimizationResult,
+  getDemoOptimizationHistory,
+  getDemoOptimalParams,
+  getDemoVoiceTestResult,
+  getDemoVoiceStatus,
+  getDemoTelegramCommands,
+  getDemoTelegramCommandResponse,
+  getDemoScreenshot,
+  getDemoScreenshotList,
+  getDemoMLTrainResult,
+  getDemoMLPrediction,
+  getDemoMLFeatures,
+  getDemoNewsTradingStatus,
+  getDemoNewsTradingStats,
+  getDemoMT5Accounts,
+  getDemoAddAccount,
+  getDemoAggregatedStats,
 } from './mock-data';
 import {
   transformAccount,
@@ -1512,4 +1561,245 @@ export async function triggerOffsiteBackup(): Promise<BackupOffsiteResponse> {
     };
   }
   return fetchAPI<BackupOffsiteResponse>('/api/backup/offsite', { method: 'POST' });
+}
+
+// =========================================================================== //
+// FRONTEND-FEATURES: 28 new API methods for 10 new feature surfaces
+// =========================================================================== //
+
+// --- Email reports ---------------------------------------------------------- //
+
+export async function sendTestEmail(recipient: string): Promise<SendTestEmailResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return getDemoSendTestEmail(recipient);
+  }
+  return fetchAPI<SendTestEmailResponse>('/api/reports/send-test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipient }),
+  });
+}
+
+export async function getDailyReport(date?: string): Promise<DailyReport> {
+  if (IS_DEMO) return getDemoDailyReport(date);
+  const path = date ? `/api/reports/daily?date=${encodeURIComponent(date)}` : '/api/reports/daily';
+  return fetchAPI<DailyReport>(path);
+}
+
+// --- Benchmark & ratios ---------------------------------------------------- //
+
+export async function getBenchmark(start: string, end: string): Promise<BenchmarkResult> {
+  if (IS_DEMO) return getDemoBenchmark(start, end);
+  const params = new URLSearchParams();
+  params.set('start', start);
+  params.set('end', end);
+  return fetchAPI<BenchmarkResult>(`/api/analytics/benchmark?${params.toString()}`);
+}
+
+export async function getRatios(): Promise<PerformanceRatios> {
+  if (IS_DEMO) return getDemoRatios();
+  return fetchAPI<PerformanceRatios>('/api/analytics/ratios');
+}
+
+// --- Seasonality ------------------------------------------------------------ //
+
+export async function getSeasonality(): Promise<SeasonalityAnalysis> {
+  if (IS_DEMO) return getDemoSeasonality();
+  return fetchAPI<SeasonalityAnalysis>('/api/analytics/seasonality');
+}
+
+export async function getSeasonalityScore(date: string): Promise<SeasonalityScore> {
+  if (IS_DEMO) return getDemoSeasonalityScore(date);
+  return fetchAPI<SeasonalityScore>(
+    `/api/analytics/seasonality/score?date=${encodeURIComponent(date)}`,
+  );
+}
+
+// --- Auto-tune -------------------------------------------------------------- //
+
+export async function optimizeParams(): Promise<OptimizationResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 1500));
+    return getDemoOptimizationResult();
+  }
+  return fetchAPI<OptimizationResult>('/api/auto-tune/optimize', { method: 'POST' });
+}
+
+export async function getCurrentOptimal(): Promise<OptimalParams> {
+  if (IS_DEMO) return getDemoOptimalParams();
+  return fetchAPI<OptimalParams>('/api/auto-tune/current');
+}
+
+export async function getOptimizationHistory(): Promise<OptimizationHistoryEntry[]> {
+  if (IS_DEMO) return getDemoOptimizationHistory();
+  const res = await fetchAPI<unknown>('/api/auto-tune/history');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.history ?? []);
+  return arr as OptimizationHistoryEntry[];
+}
+
+// --- Voice alerts ----------------------------------------------------------- //
+
+export async function testVoice(text: string, volume = 0.7): Promise<VoiceTestResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 600));
+    return getDemoVoiceTestResult(text, volume);
+  }
+  return fetchAPI<VoiceTestResult>('/api/voice/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, volume }),
+  });
+}
+
+export async function getVoiceStatus(): Promise<VoiceStatus> {
+  if (IS_DEMO) return getDemoVoiceStatus();
+  return fetchAPI<VoiceStatus>('/api/voice/status');
+}
+
+// --- Telegram remote -------------------------------------------------------- //
+
+export async function sendTelegramCommand(command: string): Promise<TelegramCommandResponse> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return getDemoTelegramCommandResponse(command);
+  }
+  return fetchAPI<TelegramCommandResponse>('/api/telegram/send-command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command }),
+  });
+}
+
+export async function getTelegramCommands(): Promise<TelegramCommand[]> {
+  if (IS_DEMO) return getDemoTelegramCommands();
+  const res = await fetchAPI<unknown>('/api/telegram/commands');
+  const arr = Array.isArray(res) ? res : ((res as Record<string, unknown>)?.commands ?? []);
+  return arr as TelegramCommand[];
+}
+
+// --- Screenshots ------------------------------------------------------------ //
+
+export async function getScreenshot(ticket: number): Promise<ScreenshotInfo> {
+  if (IS_DEMO) return getDemoScreenshot(ticket);
+  return fetchAPI<ScreenshotInfo>(`/api/screenshot/${encodeURIComponent(ticket)}`);
+}
+
+export async function listScreenshots(ticket: number): Promise<ScreenshotListResponse> {
+  if (IS_DEMO) return getDemoScreenshotList(ticket);
+  return fetchAPI<ScreenshotListResponse>(`/api/screenshots/${encodeURIComponent(ticket)}/list`);
+}
+
+// --- ML regime detection ---------------------------------------------------- //
+
+export async function trainML(): Promise<MLTrainResult> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 1800));
+    return getDemoMLTrainResult();
+  }
+  return fetchAPI<MLTrainResult>('/api/ml/train', { method: 'POST' });
+}
+
+export async function getMLPredict(symbol: string): Promise<MLPrediction> {
+  if (IS_DEMO) return getDemoMLPrediction(symbol);
+  return fetchAPI<MLPrediction>(
+    `/api/ml/predict?symbol=${encodeURIComponent(symbol)}`,
+  );
+}
+
+export async function getMLFeatures(): Promise<MLFeatures> {
+  if (IS_DEMO) return getDemoMLFeatures();
+  return fetchAPI<MLFeatures>('/api/ml/features');
+}
+
+// --- News trading mode ------------------------------------------------------ //
+
+export async function enableNewsTrading(enabled: boolean): Promise<NewsTradingStatus> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 300));
+    const status = getDemoNewsTradingStatus();
+    return { ...status, enabled };
+  }
+  return fetchAPI<NewsTradingStatus>('/api/news-trading/enable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function getNewsTradingStatus(): Promise<NewsTradingStatus> {
+  if (IS_DEMO) return getDemoNewsTradingStatus();
+  return fetchAPI<NewsTradingStatus>('/api/news-trading/status');
+}
+
+export async function getNewsTradingStats(): Promise<NewsTradingStats> {
+  if (IS_DEMO) return getDemoNewsTradingStats();
+  return fetchAPI<NewsTradingStats>('/api/news-trading/stats');
+}
+
+// --- Multi-account ---------------------------------------------------------- //
+
+export async function addAccount(body: AddAccountRequest): Promise<MT5Account> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 500));
+    return getDemoAddAccount(body);
+  }
+  return fetchAPI<MT5Account>('/api/accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listAccounts(): Promise<MT5AccountsListResponse> {
+  if (IS_DEMO) return getDemoMT5Accounts();
+  const res = await fetchAPI<unknown>('/api/accounts');
+  if (res && Array.isArray((res as Record<string, unknown>).accounts)) {
+    return res as MT5AccountsListResponse;
+  }
+  // Backend may return a bare array
+  const arr = Array.isArray(res) ? res : [];
+  return {
+    accounts: arr as MT5Account[],
+    total: arr.length,
+    active_bots: arr.filter((a) => (a as MT5Account).bot_status === 'RUNNING').length,
+  };
+}
+
+export async function removeAccount(name: string): Promise<{ ok: boolean }> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 300));
+    return { ok: true };
+  }
+  return fetchAPI<{ ok: boolean }>(
+    `/api/accounts/${encodeURIComponent(name)}`,
+    { method: 'DELETE' },
+  );
+}
+
+export async function startAccountBot(name: string): Promise<{ ok: boolean; message: string }> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return { ok: true, message: `Bot untuk akun "${name}" di-start (demo)` };
+  }
+  return fetchAPI<{ ok: boolean; message: string }>(
+    `/api/accounts/${encodeURIComponent(name)}/start`,
+    { method: 'POST' },
+  );
+}
+
+export async function stopAccountBot(name: string): Promise<{ ok: boolean; message: string }> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return { ok: true, message: `Bot untuk akun "${name}" di-stop (demo)` };
+  }
+  return fetchAPI<{ ok: boolean; message: string }>(
+    `/api/accounts/${encodeURIComponent(name)}/stop`,
+    { method: 'POST' },
+  );
+}
+
+export async function getAggregatedStats(): Promise<AggregatedStats> {
+  if (IS_DEMO) return getDemoAggregatedStats();
+  return fetchAPI<AggregatedStats>('/api/accounts/aggregate');
 }

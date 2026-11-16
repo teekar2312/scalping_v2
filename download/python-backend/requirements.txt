@@ -92,3 +92,18 @@ boto3==1.35.84
 # psutil - process / system metrics for /api/system/info + Prometheus gauges
 # (optional - backend falls back to /proc on Linux if not installed)
 psutil>=6.1.0
+
+# ---- BACKEND-FEATURES (Sprint 10) ---- #
+
+# Email daily report (async SMTP)
+aiosmtplib>=3.0.0
+
+# Voice alerts (Windows native TTS via SAPI5 / cross-platform)
+pyttsx3>=2.90
+
+# ML regime detection (Random Forest)
+scikit-learn>=1.5.0
+
+# matplotlib - chart screenshots (already pulled in transitively by scipy,
+# listed explicitly to make the dependency visible).
+matplotlib>=3.9.0

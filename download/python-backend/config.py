@@ -167,6 +167,46 @@ POSITION_SIZING_MODE: Final[str] = _get("POSITION_SIZING_MODE", "fixed").lower()
 
 
 # --------------------------------------------------------------------------- #
+# BACKEND-FEATURES (Sprint 10): new feature flags
+# --------------------------------------------------------------------------- #
+
+# Email daily report (Feature #1)
+SMTP_HOST: Final[str] = _get("SMTP_HOST", "")
+SMTP_PORT: Final[int] = int(_get("SMTP_PORT", "587"))
+SMTP_USER: Final[str] = _get("SMTP_USER", "")
+SMTP_PASS: Final[str] = _get("SMTP_PASS", "")
+EMAIL_FROM: Final[str] = _get("EMAIL_FROM", "")
+EMAIL_TO: Final[str] = _get("EMAIL_TO", "")
+
+# Auto-parameter tuning (Feature #4)
+AUTO_TUNE_ENABLED: Final[bool] = _get(
+    "AUTO_TUNE_ENABLED", "false").lower() in ("1", "true", "yes")
+AUTO_TUNE_INTERVAL_DAYS: Final[int] = int(_get("AUTO_TUNE_INTERVAL_DAYS", "7"))
+
+# Voice alerts (Feature #5)
+VOICE_ALERTS_ENABLED: Final[bool] = _get(
+    "VOICE_ALERTS_ENABLED", "false").lower() in ("1", "true", "yes")
+VOICE_VOLUME: Final[float] = float(_get("VOICE_VOLUME", "0.8"))
+
+# Telegram remote control (Feature #6)
+TELEGRAM_COMMANDS_ENABLED: Final[bool] = _get(
+    "TELEGRAM_COMMANDS_ENABLED", "false").lower() in ("1", "true", "yes")
+
+# ML regime detection (Feature #8)
+ML_REGIME_ENABLED: Final[bool] = _get(
+    "ML_REGIME_ENABLED", "false").lower() in ("1", "true", "yes")
+
+# News trading mode (Feature #9)
+NEWS_TRADING_ENABLED: Final[bool] = _get(
+    "NEWS_TRADING_ENABLED", "false").lower() in ("1", "true", "yes")
+NEWS_TRADING_RISK_PCT: Final[float] = float(_get("NEWS_TRADING_RISK_PCT", "0.005"))
+
+# Multi-account management (Feature #10)
+MULTI_ACCOUNT_ENABLED: Final[bool] = _get(
+    "MULTI_ACCOUNT_ENABLED", "false").lower() in ("1", "true", "yes")
+
+
+# --------------------------------------------------------------------------- #
 # BACKEND-100 (Sprint 9): multi-broker + AWS S3 + Alembic
 # --------------------------------------------------------------------------- #
 
@@ -435,5 +475,14 @@ __all__ = [
     "AWS_S3_BUCKET", "AWS_S3_REGION",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
     "ALEMBIC_DATABASE_URL",
+    # BACKEND-FEATURES (Sprint 10)
+    "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS",
+    "EMAIL_FROM", "EMAIL_TO",
+    "AUTO_TUNE_ENABLED", "AUTO_TUNE_INTERVAL_DAYS",
+    "VOICE_ALERTS_ENABLED", "VOICE_VOLUME",
+    "TELEGRAM_COMMANDS_ENABLED",
+    "ML_REGIME_ENABLED",
+    "NEWS_TRADING_ENABLED", "NEWS_TRADING_RISK_PCT",
+    "MULTI_ACCOUNT_ENABLED",
     "load_config", "settings",
 ]
