@@ -156,12 +156,16 @@ if _JSON_LOGGER_AVAILABLE:
         rename_fields={"name": "logger"},
     )
     _file_handler.setFormatter(_fmt)
-    _stdout_handler.setFormatter(_fmt)
+    # Console: use human-readable format (NOT JSON) for easy reading
+    _stdout_handler.setFormatter(
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                          datefmt="%H:%M:%S"))
 else:
     _file_handler.setFormatter(
         logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     _stdout_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                          datefmt="%H:%M:%S"))
 
 logging.basicConfig(
     level=getattr(logging, settings.paths.log_level, logging.INFO),

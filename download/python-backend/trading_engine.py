@@ -367,6 +367,9 @@ class TradingEngine:
                 account = await asyncio.to_thread(self.connector.get_account_info)
                 self.state.balance = account.balance
                 self.state.equity = account.equity
+                logger.info("=" * 60)
+                logger.info("TICK START | Balance: %.2f | Equity: %.2f | Profit: %.2f",
+                           account.balance, account.equity, account.profit)
             except Exception as exc:
                 logger.warning("get_account_info failed: %s", exc)
                 await self.bus.publish({
@@ -421,6 +424,8 @@ class TradingEngine:
                 if t.get("is_paper")
             ]
         self.state.open_positions = len(positions)
+        logger.info("Open positions: %d | Daily trades: %d | Daily P&L: %.2f",
+                    len(positions), daily.trade_count, daily.realized_pnl)
 
         # Weekly/overall starting balance: use last Monday & lifetime.
         weekly_start = await self._weekly_starting_balance(account.balance)
@@ -436,10 +441,10 @@ class TradingEngine:
         self.state.kill_switch = gate.kill_switch
 
         if gate.kill_switch:
-            logger.warning("Kill switch active - skipping scan")
+            logger.warning("⚠ KILL SWITCH ACTIVE — skipping scan")
             return
         if not gate.allow_new_entry:
-            logger.info("Risk gate blocks new entries: %s", gate.reasons)
+            logger.info("⛔ Risk gate BLOCKS new entries: %s", gate.reasons)
             await self.bus.publish({
                 "type": "risk_gate_blocked",
                 "reasons": gate.reasons,
@@ -447,9 +452,12 @@ class TradingEngine:
             })
             # If hard stop triggered -> engage kill switch
             if gate.tiered_stop.level == "hard":
+                logger.critical("🔴 HARD STOP TRIGGERED: %.2f%% — engaging kill switch",
+                               gate.tiered_stop.pnl_pct)
                 await self.kill(reason=f"hard_stop:{gate.tiered_stop.pnl_pct}")
             return
 
+        logger.info("✅ Risk gate PASSED — scanning markets...")
         # Scan markets
         await self.scan_markets(account.balance)
 
@@ -467,13 +475,15 @@ class TradingEngine:
         try:
             cal = get_calendar()
             news_events = await cal.fetch_calendar(impact="HIGH")
+            logger.info("News: %d HIGH events fetched", len(news_events))
         except Exception as exc:  # pragma: no cover
-            logger.warning("Tiingo calendar fetch failed: %s", exc)
+            logger.warning("Calendar fetch failed: %s", exc)
             news_events = []
 
         signals: list[SignalContext] = []
         for pair, mt5_sym in zip(settings.pairs, settings.mt5_symbols):
             try:
+                logger.info("Scanning %s (%s)...", pair, mt5_sym)
                 sig = await self._scan_symbol(pair, mt5_sym, balance, news_events)
                 if sig:
                     signals.append(sig)
